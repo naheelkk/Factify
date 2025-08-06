@@ -22,6 +22,9 @@ data/raw/*.7z
 data/raw/*.rar
 data/raw/*.tar
 data/raw/*.gz
+data/raw/*.csv
+data/raw/*.tsv
+
 
 # Large model files (use Git LFS if needed)
 model/*.pt
