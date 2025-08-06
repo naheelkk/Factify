@@ -25,4 +25,6 @@ This log records daily/alternate day progress for the Factify Mini Project (20MC
 
 ### 06/08/2025
 - **Planned:** Download LIAR & ISOT datasets, explore columns
-
+- **Done:** Downloaded LIAR, ISOT and WELFAKE datasets
+- **Next:** Preview Data, EDA
+- **Issues:** None
