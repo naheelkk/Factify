@@ -28,3 +28,9 @@ This log records daily/alternate day progress for the Factify Mini Project (20MC
 - **Done:** Downloaded LIAR, ISOT and WELFAKE datasets
 - **Next:** Preview Data, EDA
 - **Issues:** None
+
+### 07/08/2025
+- **Planned:** Clean all datasets and merge
+- **Done:** Cleaned ISOT, LIAR, WELFake; removed NaNs; saved merged_clean_dataset.csv
+- **Next:** Perform EDA and build baseline TF-IDF model
+- **Issues:** None
