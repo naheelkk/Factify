@@ -34,3 +34,28 @@ This log records daily/alternate day progress for the Factify Mini Project (20MC
 - **Done:** Cleaned ISOT, LIAR, WELFake; removed NaNs; saved merged_clean_dataset.csv
 - **Next:** Perform EDA and build baseline TF-IDF model
 - **Issues:** None
+
+### 08/08/2025
+Task(s) Completed:
+
+Downloaded and loaded FEVER and Indian Fake News datasets.
+
+Merged them with existing datasets (LIAR, WeLFAKE, etc.).
+
+Fixed missing column issues by combining title and text where applicable.
+
+Verified merged dataset integrity (no missing text or label).
+
+Final merged dataset shape: 221,220 rows → REAL: 136,105, FAKE: 85,115.
+
+Challenges Faced:
+
+Initial merge caused large data loss due to "nan" placeholder replacements.
+
+Solved by properly combining title and text before replacing placeholders.
+
+Next Steps:
+
+Apply advanced preprocessing (stopwords removal, lemmatization).
+
+Begin EDA & TF-IDF baseline model tomorrow.
