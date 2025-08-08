@@ -56,6 +56,4 @@ Solved by properly combining title and text before replacing placeholders.
 
 Next Steps:
 
-Apply advanced preprocessing (stopwords removal, lemmatization).
-
 Begin EDA & TF-IDF baseline model tomorrow.
