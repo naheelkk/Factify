@@ -3,7 +3,7 @@
 
 ## **2️⃣ Scrum Log (scrum_log.md)**
 
-Your **Scrum Log** is a **daily/alternate day progress tracker**.  
+**Scrum Log** is a **daily/alternate day progress tracker**.  
 
 **Template Example:**
 
