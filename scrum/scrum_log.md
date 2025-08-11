@@ -70,8 +70,11 @@ Begin EDA tomorrow.
 - **Next:** Build baseline TF-IDF model
 - **Issues:** None
 
+## Week 2: Model Building and analysis
+
 ### 11/08/2025
 - **Planned:** Build baseline TF-IDF model
 - **Done:** 
 - **Next:** 
 - **Issues:** None
+
