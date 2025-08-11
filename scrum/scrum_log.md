@@ -32,7 +32,7 @@ This log records daily/alternate day progress for the Factify Mini Project (20MC
 ### 07/08/2025
 - **Planned:** Clean all datasets and merge
 - **Done:** Cleaned ISOT, LIAR, WELFake; removed NaNs; saved merged_clean_dataset.csv
-- **Next:** Perform EDA and build baseline TF-IDF model
+- **Next:** Perform EDA
 - **Issues:** None
 
 ### 08/08/2025
@@ -56,4 +56,22 @@ Solved by properly combining title and text before replacing placeholders.
 
 Next Steps:
 
-Begin EDA & TF-IDF baseline model tomorrow.
+Begin EDA tomorrow.
+
+### 09/08/2025
+- **Planned:** Perform EDA  
+- **Done:** Built Bar Chart, Label Distribution
+- **Next:** Balance label distribution of FAKE and REAL
+- **Issues:** None
+
+### 10/08/2025
+- **Planned:** Balance label distribution
+- **Done:** balanced label distribution and saved the dataset in /data/processed/balanced_df.csv
+- **Next:** Build baseline TF-IDF model
+- **Issues:** None
+
+### 11/08/2025
+- **Planned:** Build baseline TF-IDF model
+- **Done:** 
+- **Next:** 
+- **Issues:** None
