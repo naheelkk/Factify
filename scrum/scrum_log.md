@@ -72,9 +72,9 @@ Begin EDA tomorrow.
 
 ## Week 2: Model Building and analysis
 
-### 11/08/2025
+### 12/08/2025
 - **Planned:** Build baseline TF-IDF model
-- **Done:** 
-- **Next:** 
+- **Done:** Built TF-IDF model using Linear SVM and Logistic Regression 
+- **Next:** Test baseline model for higher accuracy
 - **Issues:** None
 
