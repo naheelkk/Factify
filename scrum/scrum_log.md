@@ -78,3 +78,10 @@ Begin EDA tomorrow.
 - **Next:** Test baseline model for higher accuracy
 - **Issues:** None
 
+### 15/08/2025
+- **Planned:** Test baseline model and tuning
+- **Done:** Tuned the model
+- **Next:** Diagnose the issues
+- **Issues:** Fake news has large word count compared to real ones, and it is causing a massive bias in the model, i need to look at each dataset and analyse each of them to diagnose which dataset is causing the problem before going to BERT fine tuning
+
+### 16/08/2025
