@@ -24,7 +24,7 @@ data/raw/*.tar
 data/raw/*.gz
 data/raw/*.csv
 data/raw/*.tsv
-
+data/trimmed_processed/*.pkl
 
 # Large model files (use Git LFS if needed)
 model/*.pt
