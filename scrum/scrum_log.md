@@ -92,6 +92,6 @@ Begin EDA tomorrow.
 
 ### 17/08/2025
 - **Planned:** Build models on single datasets, i.e. 5 models
-- **Done:** Built TF-IDF + Logistic Regression models for each datasets(accuracy ~94% on average)
+- **Done:** Built TF-IDF + Logistic Regression models for each datasets(accuracy ~94% on average) other algorithms like SVM and Naive Bayes(Complement,Multinomial) will give similar perfomance, which is a given.
 - **Next:** 
 - **Issues:** None
