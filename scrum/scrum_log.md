@@ -85,3 +85,13 @@ Begin EDA tomorrow.
 - **Issues:** Fake news has large word count compared to real ones, and it is causing a massive bias in the model, i need to look at each dataset and analyse each of them to diagnose which dataset is causing the problem before going to BERT fine tuning
 
 ### 16/08/2025
+- **Planned:** Diagnosing recall issues
+- **Done:** Diagnosed the issues and it is showing bad perfomance ~58% even when the average text lengths are adjusted before training
+- **Next:** Build models on single datasets, i.e. 5 models
+- **Issues:** None
+
+### 17/08/2025
+- **Planned:** Build models on single datasets, i.e. 5 models
+- **Done:** Built TF-IDF + Logistic Regression models for each datasets(accuracy ~94% on average)
+- **Next:** 
+- **Issues:** None
