@@ -8,7 +8,7 @@
 
 | Dataset | 🔍 Logistic Regression | ⚡ Linear SVM | 🎯 MultinomialNB | 🔄 ComplementNB | 🌲 Random Forest | 🚀 Gradient Boosting |
 |---------|------------------------|---------------|-------------------|------------------|-------------------|-----------------------|
-| 🔴 **REAL/FAKE** | **94%** 🟢<br/>*Prec: 0.xx \| Rec: 0.xx* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* |
+| 🔴 **REAL/FAKE** | **94%** 🟢<br/>*Prec: .xx \| Rec: 0.xx* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* |
 | 🟡 **WELFake** | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* |
 | 🟣 **LIAR** | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* |
 | 🟠 **FEVER** | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* | ⏳ *Pending* |
