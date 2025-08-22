@@ -48,3 +48,11 @@ logs/
 # VS Code
 .vscode/
 .history/
+
+
+#bert
+results/
+logs/
+*.pt
+*.bin
+*.ckpt
