@@ -27,6 +27,7 @@ data/raw/*.gz
 data/raw/
 data/raw/*.tsv
 data/processed/
+data/processed/.*csv
 
 # Large model files (use Git LFS if needed)
 model/*.pt
