@@ -24,7 +24,7 @@ data/raw/*.7z
 data/raw/*.rar
 data/raw/*.tar
 data/raw/*.gz
-data/raw/*.csv
+data/raw/
 data/raw/*.tsv
 data/processed/
 
