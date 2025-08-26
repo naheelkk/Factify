@@ -55,4 +55,4 @@ results/
 logs/
 *.pt
 *.bin
-*.ckpt
+*.ckpt"data/" 
