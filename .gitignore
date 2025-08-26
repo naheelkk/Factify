@@ -26,7 +26,7 @@ data/raw/*.tar
 data/raw/*.gz
 data/raw/*.csv
 data/raw/*.tsv
-data/trimmed_processed/*.pkl
+data/processed/
 
 # Large model files (use Git LFS if needed)
 model/*.pt
@@ -56,3 +56,4 @@ logs/
 *.pt
 *.bin
 *.ckpt"data/" 
+"data/processed/welfake_cleaned" 
