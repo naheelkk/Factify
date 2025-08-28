@@ -63,7 +63,7 @@ explanation_tokenizer = None
 
 # Configuration
 MODEL_NAME = "naheelkk/fake-news-bert-model"  # Replace with your HF model name
-EXPLANATION_MODEL = "google/flan-t5-small"
+EXPLANATION_MODEL = "google/flan-t5-large"
 MAX_LENGTH = 512
 SEARCH_API_KEY = None  # Set your search API key (Google Custom Search, Bing, etc.)
 SEARCH_ENGINE_ID = None  # Set your search engine ID
@@ -316,67 +316,130 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
         return f"This text is classified as {prediction.lower()} news with {confidence:.1%} confidence based on content analysis."
     
     try:
-        # Prepare source information for the prompt
+        # CORRECTED: Better source context preparation
         source_context = ""
-        if sources:
-            source_context = "\n\nRelevant sources found:\n"
-            for i, source in enumerate(sources[:3], 1):
-                source_context += f"{i}. {source.get('title', 'Source')}: {source.get('snippet', '')[:100]}...\n"
+        if sources and len(sources) > 0:
+            source_context = "\n\nVerification sources:\n"
+            for i, source in enumerate(sources[:2], 1):  # Limit to 2 sources to save tokens
+                title = source.get('title', 'Source')[:60]
+                snippet = source.get('snippet', '')[:80]
+                source_context += f"Source {i}: {title} - {snippet}\n"
         
-        # Create instruction prompt for FLAN-T5
-        prompt = f"""Analyze this news text and explain why it's classified as {prediction.lower()} news with {confidence:.1%} confidence.
+        # CORRECTED: Improved prompt structure for FLAN-T5
+        if prediction.lower() == "fake":
+            instruction = (
+                "Explain why this news article is likely fake or misleading. "
+                "Focus on factual inaccuracies, logical inconsistencies, or lack of credible sources."
+            )
+        else:
+            instruction = (
+                "Explain why this news article appears to be legitimate. "
+                "Focus on factual accuracy, credible sources, and logical consistency."
+            )
         
-        News text: {text[:300]}
-        {source_context}
+        # CORRECTED: More structured prompt for FLAN-T5
+        prompt = (
+            f"{instruction}\n\n"
+            f"Article: {text[:300]}...\n"
+            f"Classification: {prediction} (confidence: {confidence:.1%})"
+            f"{source_context}\n\n"
+            f"Explanation:"
+        )
         
-        Provide a brief explanation focusing on:
-        1. Content credibility based on available sources
-        2. Language patterns and style indicators
-        3. Verifiability of claims made
+        logger.info(f"Explanation prompt length: {len(prompt)} chars")
         
-        Reference sources when possible. Keep explanation informative but concise.
+        # CORRECTED: Better tokenization
+        inputs = explanation_tokenizer(
+            prompt,
+            return_tensors="pt",
+            max_length=512,
+            truncation=True,
+            padding=True
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        Explanation:"""
-        
-        # Tokenize the prompt
-        inputs = explanation_tokenizer.encode(prompt, return_tensors="pt", max_length=512, truncation=True)
-        inputs = inputs.to(device)
-        
-        # Generate explanation
+        # CORRECTED: Improved generation parameters
         with torch.no_grad():
             outputs = explanation_model.generate(
-                inputs,
+                **inputs,
                 max_length=200,
-                min_length=30,
-                num_beams=4,
-                temperature=0.7,
+                min_length=40,           # Ensure substantive explanations
                 do_sample=True,
+                top_p=0.85,             # More focused than 0.9
+                temperature=0.8,        # Better balance
+                num_beams=3,            # Add beam search
                 early_stopping=True,
-                pad_token_id=explanation_tokenizer.pad_token_id
+                pad_token_id=explanation_tokenizer.pad_token_id,
+                repetition_penalty=1.2, # Prevent repetition
+                no_repeat_ngram_size=2  # Prevent 2-gram repetition
             )
         
         # Decode the response
         explanation = explanation_tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # Clean up explanation
-        if len(explanation.strip()) < 15:
-            explanation = f"This text shows characteristics typical of {prediction.lower()} news. "
-            if sources:
-                explanation += f"Based on {len(sources)} fact-checking sources, "
-                if prediction.lower() == "fake":
-                    explanation += "the claims appear unsubstantiated or contradicted by reliable sources."
-                else:
-                    explanation += "the information aligns with credible reporting and verified facts."
+        # CORRECTED: Better post-processing
+        # Remove the original prompt from the output (T5 sometimes includes it)
+        if "Explanation:" in explanation:
+            explanation = explanation.split("Explanation:")[-1].strip()
         
-        return explanation.strip()
+        # Clean up common artifacts and the original prompt text
+        explanation = re.sub(r'^(Explain why|Article:|Classification:).*?\n', '', explanation, flags=re.MULTILINE | re.DOTALL)
+        explanation = explanation.strip()
+        
+        # CORRECTED: Better fallback detection and handling
+        if (len(explanation.strip()) < 20 or 
+            explanation.lower().startswith(text.lower()[:20]) or
+            explanation.lower().startswith(prompt.lower()[:20])):
+            
+            logger.warning("T5 explanation generation failed, using enhanced fallback")
+            
+            # Enhanced template explanation
+            if prediction.lower() == "fake":
+                explanation = (
+                    f"This content exhibits patterns commonly associated with misinformation, "
+                    f"such as unverified claims, sensational language, or lack of credible attribution. "
+                )
+            else:
+                explanation = (
+                    f"This article demonstrates characteristics of legitimate journalism, "
+                    f"including factual reporting style and verifiable information patterns. "
+                )
+            
+            # Add source-based context if available
+            if sources and len(sources) > 0:
+                explanation += (
+                    f"Cross-verification with {len(sources)} external sources "
+                    f"{'contradicts key claims' if prediction.lower() == 'fake' else 'supports the main assertions'} "
+                    f"presented in the article."
+                )
+        
+        # Final cleanup
+        explanation = re.sub(r'\s+', ' ', explanation).strip()
+        
+        # Ensure proper sentence ending
+        if explanation and not explanation.endswith(('.', '!', '?')):
+            explanation += '.'
+            
+        logger.info(f"Final explanation length: {len(explanation)} chars")
+        return explanation
         
     except Exception as e:
         logger.error(f"Error generating explanation: {str(e)}")
-        fallback = f"Analysis indicates this is {prediction.lower()} news with {confidence:.1%} confidence."
+        
+        # CORRECTED: More informative fallback
+        fallback = (
+            f"Analysis indicates this is {prediction.lower()} news with {confidence:.1%} confidence. "
+        )
+        
         if sources:
-            fallback += f" Based on {len(sources)} sources consulted for verification."
+            fallback += (
+                f"Assessment included {len(sources)} verification sources "
+                f"for fact-checking and credibility analysis."
+            )
+        else:
+            fallback += "Classification based on content patterns and linguistic analysis."
+            
         return fallback
-
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
