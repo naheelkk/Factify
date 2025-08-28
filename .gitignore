@@ -34,7 +34,6 @@ model/*.pt
 model/*.bin
 model/tokenizer/
 
-fake-news-model/
 # Hugging Face caches
 ~/.cache/
 ~/.huggingface/
