@@ -62,11 +62,11 @@ explanation_model = None
 explanation_tokenizer = None
 
 # Configuration
-MODEL_NAME = "naheelkk/fake-news-bert-model"  # Replace with your HF model name
+MODEL_NAME = "naheelkk/fake-news-bert-model" 
 EXPLANATION_MODEL = "google/flan-t5-large"
 MAX_LENGTH = 512
-SEARCH_API_KEY = None  # Set your search API key (Google Custom Search, Bing, etc.)
-SEARCH_ENGINE_ID = None  # Set your search engine ID
+SEARCH_API_KEY = None  
+SEARCH_ENGINE_ID = None  
 
 @app.on_event("startup")
 async def load_model():
@@ -104,6 +104,8 @@ async def load_model():
     except Exception as e:
         logger.error(f"Error loading model: {str(e)}")
         raise e
+
+
 
 def extract_key_claims(text: str) -> List[str]:
     """Extract key claims from the news text for fact-checking"""
@@ -152,6 +154,8 @@ def extract_key_claims(text: str) -> List[str]:
     except Exception as e:
         logger.error(f"Error extracting claims: {str(e)}")
         return [text[:100]]
+
+
 
 def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
     """Search for sources using web search API"""
