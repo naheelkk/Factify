@@ -34,6 +34,8 @@ model/*.pt
 model/*.bin
 model/tokenizer/
 
+
+
 # Hugging Face caches
 ~/.cache/
 ~/.huggingface/
