@@ -2,7 +2,7 @@ services:
   - type: web
     name: factify-backend
     env: python
-    plan: free
+    plan: free   # or starter if you need more resources
     buildCommand: |
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
       source $HOME/.cargo/env
