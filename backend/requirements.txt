@@ -7,3 +7,4 @@ numpy==1.26.4
 python-multipart==0.0.6
 sentencepiece==0.1.99
 requests==2.31.0
+orjson==3.10.7
