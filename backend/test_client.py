@@ -1,58 +1,57 @@
-import requests
-import json
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import numpy as np
 
-# API endpoint
-BASE_URL = "http://localhost:8000"
+# Load your model
+MODEL_PATH = "/content/drive/MyDrive/Data-Single/model/"  # Update this path
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
 
-def test_health():
-    """Test health endpoint"""
-    response = requests.get(f"{BASE_URL}/health")
-    print("Health Check:")
-    print(json.dumps(response.json(), indent=2))
-    print()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+model.eval()
 
-def test_prediction(text, explain=True):
-    """Test prediction endpoint"""
-    data = {
-        "text": text,
-        "explain": explain
-    }
-    
-    response = requests.post(f"{BASE_URL}/predict", json=data)
-    
-    if response.status_code == 200:
-        result = response.json()
-        print(f"Text: {result['text'][:100]}...")
-        print(f"Prediction: {result['prediction']}")
-        print(f"Confidence: {result['confidence_score']:.2%}")
-        print(f"Raw Scores: {result['raw_scores']}")
-        if result['explanation']:
-            print(f"Explanation: {result['explanation']}")
-        print("-" * 50)
-    else:
-        print(f"Error: {response.status_code} - {response.text}")
+# Check model configuration
+print("Model config:")
+print(f"Number of labels: {model.config.num_labels}")
+if hasattr(model.config, 'id2label'):
+    print(f"Label mapping: {model.config.id2label}")
 
-if __name__ == "__main__":
-    # Test health
-    test_health()
+# Test cases
+test_cases = [
+    "Scientists have discovered that vaccines contain microchips to control people's minds",  # Should be Fake
+    "The World Health Organization announced new guidelines for COVID-19 vaccination schedules",  # Should be Real
+]
+
+def predict_text(text):
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        max_length=256,
+        truncation=True,
+        padding=True
+    )
+    inputs = {k: v.to(device) for k, v in inputs.items()}
     
-    # Test sample news articles
-    test_cases = [
-        {
-            "text": "Breaking: Local scientists discover new method to purify water using advanced filtration technology. The research was published in the Journal of Environmental Science and shows promising results for developing countries.",
-            "explain": True
-        },
-        {
-            "text": "SHOCKING: Aliens have landed in Area 51 and the government is hiding it from us! Secret sources reveal that extraterrestrial beings are working with military officials. You won't believe what happens next!",
-            "explain": True
-        },
-        {
-            "text": "The stock market closed higher today with the S&P 500 gaining 1.2%. Technology stocks led the rally as investors showed confidence in the sector's growth prospects.",
-            "explain": True
-        }
-    ]
-    
-    for i, test_case in enumerate(test_cases, 1):
-        print(f"Test Case {i}:")
-        test_prediction(**test_case)
-        print()
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+        probabilities = torch.nn.functional.softmax(logits, dim=-1)
+        probabilities = probabilities.cpu().numpy()[0]
+        
+        predicted_class = np.argmax(probabilities)
+        confidence = float(probabilities[predicted_class])
+        
+        # Based on training: 0 = Fake, 1 = Real
+        labels = ["Fake", "Real"]
+        prediction = labels[predicted_class]
+        
+        return prediction, confidence, probabilities
+
+# Test predictions
+for i, text in enumerate(test_cases):
+    prediction, confidence, probs = predict_text(text)
+    print(f"\nTest {i+1}: {text[:50]}...")
+    print(f"Prediction: {prediction}")
+    print(f"Confidence: {confidence:.4f}")
+    print(f"Probabilities: Fake={probs[0]:.4f}, Real={probs[1]:.4f}")

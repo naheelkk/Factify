@@ -61,10 +61,10 @@ device = None
 explanation_model = None
 explanation_tokenizer = None
 
-# Configuration
-MODEL_NAME = "naheelkk/fake-news-bert-model" 
+# FIXED: Use the correct model name from the notebook
+MODEL_NAME = "naheelkk/fake-news-bert-model"  # This should be the path to your saved model
 EXPLANATION_MODEL = "google/flan-t5-large"
-MAX_LENGTH = 512
+MAX_LENGTH = 256  # Match the notebook's MAX_LENGTH
 SEARCH_API_KEY = None  
 SEARCH_ENGINE_ID = None  
 
@@ -80,11 +80,21 @@ async def load_model():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {device}")
         
-        # Load tokenizer and model for classification
+        # FIXED: Load tokenizer and model for classification
+        # Use the local path from your Google Drive if running locally
+        # MODEL_PATH = "/content/drive/MyDrive/Data-Single/model/"  # Use this if loading from local path
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
         model.to(device)
         model.eval()
+        
+        # FIXED: Check label mapping - this is crucial!
+        logger.info(f"Model config: {model.config}")
+        logger.info(f"Number of labels: {model.config.num_labels}")
+        if hasattr(model.config, 'id2label'):
+            logger.info(f"Label mapping: {model.config.id2label}")
+        else:
+            logger.warning("No explicit label mapping found in model config")
         
         logger.info("Classification model loaded successfully!")
         
@@ -104,8 +114,6 @@ async def load_model():
     except Exception as e:
         logger.error(f"Error loading model: {str(e)}")
         raise e
-
-
 
 def extract_key_claims(text: str) -> List[str]:
     """Extract key claims from the news text for fact-checking"""
@@ -154,8 +162,6 @@ def extract_key_claims(text: str) -> List[str]:
     except Exception as e:
         logger.error(f"Error extracting claims: {str(e)}")
         return [text[:100]]
-
-
 
 def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
     """Search for sources using web search API"""
@@ -256,11 +262,11 @@ def calibrate_confidence(raw_confidence: float, temperature: float = 2.0) -> flo
 def get_prediction(text: str):
     """Get prediction and confidence scores from the model"""
     try:
-        # Tokenize input
+        # Tokenize input - FIXED: Use same MAX_LENGTH as training
         inputs = tokenizer(
             text,
             return_tensors="pt",
-            max_length=MAX_LENGTH,
+            max_length=MAX_LENGTH,  # Use 256 to match training
             truncation=True,
             padding=True
         )
@@ -273,7 +279,7 @@ def get_prediction(text: str):
             outputs = model(**inputs)
             logits = outputs.logits
             
-            # Apply temperature scaling to logits for better calibration
+            # FIXED: Apply temperature scaling to logits for better calibration
             temperature = 1.5  # Higher = more conservative confidence
             scaled_logits = logits / temperature
             
@@ -288,12 +294,18 @@ def get_prediction(text: str):
             # Apply confidence calibration
             confidence = calibrate_confidence(raw_confidence)
             
-            # Map class to label (adjust based on your model's labels)
-            # Check if your model outputs [REAL, FAKE] or [FAKE, REAL]
-            labels = ["Real", "Fake"]  # Update this based on your model
+            # FIXED: Check the model's label mapping
+            # Based on your training code: 0 = Fake, 1 = Real
+            # But verify this matches your model's actual config
+            # if hasattr(model.config, 'id2label') and model.config.id2label:
+            #     labels = [model.config.id2label[0], model.config.id2label[1]]
+            # else:
+                # Default assumption based on training data
+            labels = ["Fake", "Real"]  # 0 = Fake, 1 = Real
+            
             prediction = labels[predicted_class]
             
-            # Additional logic: if confidence is very close, be more conservative
+            # FIXED: Additional logic for ambiguous cases
             prob_diff = abs(probabilities[0] - probabilities[1])
             if prob_diff < 0.2:  # Very close scores
                 confidence = min(confidence, 0.65)  # Cap confidence for ambiguous cases
@@ -301,12 +313,15 @@ def get_prediction(text: str):
             
             # Create raw scores dictionary with original probabilities
             raw_scores = {
-                "real": float(probabilities[0]),
-                "fake": float(probabilities[1])
+                "fake": float(probabilities[0]),  # Probability of being fake
+                "real": float(probabilities[1])   # Probability of being real
             }
             
-            # Log for debugging
-            logger.info(f"Prediction: {prediction}, Raw confidence: {raw_confidence:.3f}, Calibrated: {confidence:.3f}")
+            # FIXED: Enhanced logging for debugging
+            logger.info(f"Text sample: '{text[:50]}...'")
+            logger.info(f"Raw probabilities - Fake: {probabilities[0]:.4f}, Real: {probabilities[1]:.4f}")
+            logger.info(f"Predicted class: {predicted_class} ({prediction})")
+            logger.info(f"Raw confidence: {raw_confidence:.4f}, Calibrated: {confidence:.4f}")
             
             return prediction, confidence, raw_scores
             
@@ -320,7 +335,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
         return f"This text is classified as {prediction.lower()} news with {confidence:.1%} confidence based on content analysis."
     
     try:
-        # CORRECTED: Better source context preparation
+        # Better source context preparation
         source_context = ""
         if sources and len(sources) > 0:
             source_context = "\n\nVerification sources:\n"
@@ -329,7 +344,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
                 snippet = source.get('snippet', '')[:80]
                 source_context += f"Source {i}: {title} - {snippet}\n"
         
-        # CORRECTED: Improved prompt structure for FLAN-T5
+        # Improved prompt structure for FLAN-T5
         if prediction.lower() == "fake":
             instruction = (
                 "Explain why this news article is likely fake or misleading. "
@@ -341,7 +356,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
                 "Focus on factual accuracy, credible sources, and logical consistency."
             )
         
-        # CORRECTED: More structured prompt for FLAN-T5
+        # More structured prompt for FLAN-T5
         prompt = (
             f"{instruction}\n\n"
             f"Article: {text[:300]}...\n"
@@ -352,7 +367,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
         
         logger.info(f"Explanation prompt length: {len(prompt)} chars")
         
-        # CORRECTED: Better tokenization
+        # Better tokenization
         inputs = explanation_tokenizer(
             prompt,
             return_tensors="pt",
@@ -362,7 +377,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        # CORRECTED: Improved generation parameters
+        # Improved generation parameters
         with torch.no_grad():
             outputs = explanation_model.generate(
                 **inputs,
@@ -381,7 +396,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
         # Decode the response
         explanation = explanation_tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # CORRECTED: Better post-processing
+        # Better post-processing
         # Remove the original prompt from the output (T5 sometimes includes it)
         if "Explanation:" in explanation:
             explanation = explanation.split("Explanation:")[-1].strip()
@@ -390,7 +405,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
         explanation = re.sub(r'^(Explain why|Article:|Classification:).*?\n', '', explanation, flags=re.MULTILINE | re.DOTALL)
         explanation = explanation.strip()
         
-        # CORRECTED: Better fallback detection and handling
+        # Better fallback detection and handling
         if (len(explanation.strip()) < 20 or 
             explanation.lower().startswith(text.lower()[:20]) or
             explanation.lower().startswith(prompt.lower()[:20])):
@@ -430,7 +445,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
     except Exception as e:
         logger.error(f"Error generating explanation: {str(e)}")
         
-        # CORRECTED: More informative fallback
+        # More informative fallback
         fallback = (
             f"Analysis indicates this is {prediction.lower()} news with {confidence:.1%} confidence. "
         )
@@ -444,6 +459,7 @@ async def get_source_based_explanation(text: str, prediction: str, confidence: f
             fallback += "Classification based on content patterns and linguistic analysis."
             
         return fallback
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
@@ -545,6 +561,45 @@ async def root():
             "docs": "/docs"
         }
     }
+
+# FIXED: Add a simple test endpoint for debugging
+@app.get("/test")
+async def test_prediction():
+    """Test endpoint to verify model predictions work correctly"""
+    if model is None:
+        return {"error": "Model not loaded"}
+    
+    # Test with both fake and real examples
+    test_cases = [
+        {
+            "text": "Scientists have discovered that vaccines contain microchips to control people's minds",
+            "expected": "Fake"
+        },
+        {
+            "text": "The World Health Organization announced new guidelines for COVID-19 vaccination schedules",
+            "expected": "Real"
+        }
+    ]
+    
+    results = []
+    for case in test_cases:
+        try:
+            prediction, confidence, raw_scores = get_prediction(case["text"])
+            results.append({
+                "text": case["text"][:50] + "...",
+                "expected": case["expected"],
+                "predicted": prediction,
+                "confidence": confidence,
+                "raw_scores": raw_scores,
+                "correct": prediction == case["expected"]
+            })
+        except Exception as e:
+            results.append({
+                "text": case["text"][:50] + "...",
+                "error": str(e)
+            })
+    
+    return {"test_results": results}
 
 if __name__ == "__main__":
     import uvicorn
