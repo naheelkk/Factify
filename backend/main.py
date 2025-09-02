@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, T5ForConditionalGeneration, T5Tokenizer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from typing import Optional, List
 import logging
 import numpy as np
@@ -11,17 +11,21 @@ import re
 from urllib.parse import quote
 import asyncio
 from datetime import datetime
+# import openai
+import os
+from groq import Groq
+# import anthropic
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Factify API", description="Fake news detection with source-based AI explanations")
+app = FastAPI(title="Factify API", description="Fake news detection with API-based explanations")
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure this properly for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,114 +55,335 @@ class PredictionResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
-    explanation_model_loaded: bool
+    explanation_service_available: bool
     search_enabled: bool
 
-# Global variables for model
+# Global variables
 model = None
 tokenizer = None
 device = None
-explanation_model = None
-explanation_tokenizer = None
 
-# FIXED: Use the correct model name from the notebook
-MODEL_NAME = "naheelkk/fake-news-bert-model"  # This should be the path to your saved model
-EXPLANATION_MODEL = "google/flan-t5-large"
-MAX_LENGTH = 256  # Match the notebook's MAX_LENGTH
-SEARCH_API_KEY = None  
-SEARCH_ENGINE_ID = None  
+# Configuration - Add your API keys here
+# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Set via environment variable
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # Free tier available
+# ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+# HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")  # Free inference API
+
+# Model configuration
+MODEL_NAME = "naheelkk/fake-news-bert-model"
+MAX_LENGTH = 256
 
 @app.on_event("startup")
 async def load_model():
-    """Load the model and tokenizer on startup"""
-    global model, tokenizer, device, explanation_model, explanation_tokenizer
+    """Load only the classification model - no explanation LLM needed locally"""
+    global model, tokenizer, device
     
     try:
         logger.info(f"Loading classification model: {MODEL_NAME}")
         
-        # Set device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {device}")
         
-        # FIXED: Load tokenizer and model for classification
-        # Use the local path from your Google Drive if running locally
-        # MODEL_PATH = "/content/drive/MyDrive/Data-Single/model/"  # Use this if loading from local path
+        # Load only the classification model
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
         model.to(device)
         model.eval()
         
-        # FIXED: Check label mapping - this is crucial!
-        logger.info(f"Model config: {model.config}")
-        logger.info(f"Number of labels: {model.config.num_labels}")
-        if hasattr(model.config, 'id2label'):
-            logger.info(f"Label mapping: {model.config.id2label}")
-        else:
-            logger.warning("No explicit label mapping found in model config")
-        
         logger.info("Classification model loaded successfully!")
-        
-        # Load explanation model (T5 for instruction following)
-        try:
-            logger.info(f"Loading explanation model: {EXPLANATION_MODEL}")
-            explanation_tokenizer = T5Tokenizer.from_pretrained(EXPLANATION_MODEL)
-            explanation_model = T5ForConditionalGeneration.from_pretrained(EXPLANATION_MODEL)
-            explanation_model.to(device)
-            explanation_model.eval()
-            logger.info("Explanation model loaded successfully!")
-        except Exception as e:
-            logger.warning(f"Could not load explanation model: {str(e)}")
-            explanation_model = None
-            explanation_tokenizer = None
+        logger.info("Using API-based explanation service - no local LLM needed!")
         
     except Exception as e:
         logger.error(f"Error loading model: {str(e)}")
         raise e
 
-def extract_key_claims(text: str) -> List[str]:
-    """Extract key claims from the news text for fact-checking"""
-    try:
-        # Use FLAN-T5 to extract key claims
-        if explanation_model is None:
-            return [text[:100]]  # Fallback
+class ExplanationService:
+    """Centralized service for API-based explanations"""
+    
+    def __init__(self):
+        self.services = []
         
-        prompt = f"Extract 2-3 key factual claims from this news text that can be fact-checked:\n\n{text[:400]}\n\nKey claims:"
-        
-        inputs = explanation_tokenizer.encode(prompt, return_tensors="pt", max_length=512, truncation=True)
-        inputs = inputs.to(device)
-        
-        with torch.no_grad():
-            outputs = explanation_model.generate(
-                inputs,
-                max_length=100,
-                num_beams=3,
+        # Initialize available services based on API keys
+        # if OPENAI_API_KEY:
+        #     self.services.append("openai")
+        #     openai.api_key = OPENAI_API_KEY
+            
+        if GROQ_API_KEY:
+            self.services.append("groq")
+            self.groq_client = Groq(api_key=GROQ_API_KEY)
+            
+        # if ANTHROPIC_API_KEY:
+        #     self.services.append("anthropic")
+        #     self.anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            
+        # if HUGGINGFACE_API_KEY:
+        #     self.services.append("huggingface")
+    
+    async def generate_explanation_openai(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
+        """Generate explanation using OpenAI API (GPT-3.5/GPT-4)"""
+        try:
+            source_context = ""
+            if sources and len(sources) > 0:
+                source_context = "\n\nVerification sources:\n"
+                for i, source in enumerate(sources[:2], 1):
+                    title = source.get('title', 'Source')[:60]
+                    snippet = source.get('snippet', '')[:80]
+                    source_context += f"Source {i}: {title} - {snippet}\n"
+            
+            system_prompt = """You are an expert fact-checker and media analyst. Provide clear, concise explanations for news article classifications."""
+            
+            user_prompt = f"""
+            Article: {text[:400]}...
+            Classification: {prediction} (confidence: {confidence:.1%})
+            {source_context}
+            
+            Please explain why this article is classified as {prediction.lower()} news. Focus on:
+            - Content patterns and language analysis
+            - Credibility indicators
+            - Factual accuracy (if sources available)
+            
+            Keep the explanation concise (2-3 sentences) and informative.
+            """
+            
+            response = await openai.ChatCompletion.acreate(
+                model="gpt-3.5-turbo",  # or "gpt-4" if available
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=150,
+                temperature=0.3
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            logger.error(f"OpenAI API error: {str(e)}")
+            return None
+    
+    async def generate_explanation_groq(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
+        """Generate explanation using Groq API (Fast, free tier available)"""
+        try:
+            source_context = ""
+            if sources and len(sources) > 0:
+                source_context = "\n\nVerification sources:\n"
+                for i, source in enumerate(sources[:2], 1):
+                    title = source.get('title', 'Source')[:60]
+                    snippet = source.get('snippet', '')[:80]
+                    source_context += f"Source {i}: {title} - {snippet}\n"
+            
+            prompt = f"""
+            You are an expert fact-checker. Explain why this news article is classified as {prediction.lower()}.
+            
+            Article: {text[:400]}...
+            Classification: {prediction} (confidence: {confidence:.1%})
+            {source_context}
+            
+            Provide a clear, 2-3 sentence explanation focusing on credibility indicators and content analysis.
+            """
+            
+            chat_completion = self.groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are an expert fact-checker and media analyst."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama3-8b-8192",  # Fast and free
+                max_tokens=150,
+                temperature=0.3
+            )
+            
+            return chat_completion.choices[0].message.content.strip()
+            
+        except Exception as e:
+            logger.error(f"Groq API error: {str(e)}")
+            return None
+    
+    async def generate_explanation_anthropic(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
+        """Generate explanation using Anthropic Claude API"""
+        try:
+            source_context = ""
+            if sources and len(sources) > 0:
+                source_context = "\n\nVerification sources:\n"
+                for i, source in enumerate(sources[:2], 1):
+                    title = source.get('title', 'Source')[:60]
+                    snippet = source.get('snippet', '')[:80]
+                    source_context += f"Source {i}: {title} - {snippet}\n"
+            
+            prompt = f"""
+            Explain why this news article is classified as {prediction.lower()} news.
+            
+            Article: {text[:400]}...
+            Classification: {prediction} (confidence: {confidence:.1%})
+            {source_context}
+            
+            Provide a clear, concise explanation (2-3 sentences) focusing on credibility indicators and content patterns.
+            """
+            
+            message = self.anthropic_client.messages.create(
+                model="claude-3-haiku-20240307",  # Most cost-effective
+                max_tokens=150,
                 temperature=0.3,
-                do_sample=False,
-                early_stopping=True,
-                pad_token_id=explanation_tokenizer.pad_token_id
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            return message.content[0].text.strip()
+            
+        except Exception as e:
+            logger.error(f"Anthropic API error: {str(e)}")
+            return None
+    
+    async def generate_explanation_huggingface(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
+        """Generate explanation using HuggingFace Inference API (Free tier)"""
+        try:
+            API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
+            headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+            
+            source_context = ""
+            if sources and len(sources) > 0:
+                source_context = f" Based on {len(sources)} verification sources,"
+            
+            prompt = f"Explain why this news article is {prediction.lower()}:{source_context} {text[:200]}..."
+            
+            payload = {
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 100,
+                    "temperature": 0.3,
+                    "return_full_text": False
+                }
+            }
+            
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0].get('generated_text', '').strip()
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"HuggingFace API error: {str(e)}")
+            return None
+    
+    async def generate_explanation_ollama(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
+        """Generate explanation using local Ollama (if running)"""
+        try:
+            # Check if Ollama is running locally
+            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            if response.status_code != 200:
+                return None
+            
+            source_context = ""
+            if sources and len(sources) > 0:
+                source_context = f"\nSources checked: {len(sources)} verification sources"
+            
+            prompt = f"""
+            Explain why this news article is classified as {prediction.lower()} news:
+            
+            Article: {text[:300]}...
+            Confidence: {confidence:.1%}{source_context}
+            
+            Provide a brief, factual explanation (2-3 sentences).
+            """
+            
+            payload = {
+                "model": "llama3.1:8b",  # or whatever model you have
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,
+                    "num_predict": 100
+                }
+            }
+            
+            response = requests.post("http://localhost:11434/api/generate", json=payload, timeout=15)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get('response', '').strip()
+                
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Ollama not available: {str(e)}")
+            return None
+    
+    async def get_explanation(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
+        """Try different explanation services in order of preference"""
+        
+        # Service priority order (most reliable first)
+        service_methods = [
+            ("groq", self.generate_explanation_groq),  # Fast and often free
+            ("openai", self.generate_explanation_openai),  # High quality
+            ("anthropic", self.generate_explanation_anthropic),  # High quality
+            ("ollama", self.generate_explanation_ollama),  # Local, no API costs
+            ("huggingface", self.generate_explanation_huggingface),  # Free tier
+        ]
+        
+        for service_name, method in service_methods:
+            if service_name in self.services or service_name == "ollama":
+                try:
+                    logger.info(f"Trying {service_name} for explanation generation")
+                    explanation = await method(text, prediction, confidence, sources)
+                    if explanation:
+                        logger.info(f"Successfully generated explanation using {service_name}")
+                        return explanation
+                except Exception as e:
+                    logger.warning(f"Failed to get explanation from {service_name}: {str(e)}")
+                    continue
+        
+        # Fallback to template-based explanation
+        logger.info("All API services failed, using template explanation")
+        return self.get_template_explanation(text, prediction, confidence, sources)
+    
+    def get_template_explanation(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
+        """Fallback template-based explanation"""
+        if prediction.lower() == "fake":
+            explanation = (
+                f"This content exhibits patterns commonly associated with misinformation, "
+                f"such as unverified claims, sensational language, or lack of credible sources. "
+            )
+        else:
+            explanation = (
+                f"This article demonstrates characteristics of legitimate journalism, "
+                f"including factual reporting style and verifiable information patterns. "
             )
         
-        claims_text = explanation_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        if sources and len(sources) > 0:
+            explanation += (
+                f"Cross-verification with {len(sources)} external sources "
+                f"{'contradicts key claims' if prediction.lower() == 'fake' else 'supports the main assertions'} "
+                f"presented in the article."
+            )
         
-        # Split claims into list
-        claims = [claim.strip() for claim in claims_text.split('\n') if claim.strip()]
+        return explanation
+
+# Initialize the explanation service
+explanation_service = ExplanationService()
+
+def extract_key_claims(text: str) -> List[str]:
+    """Simple rule-based claim extraction (no LLM needed)"""
+    try:
+        sentences = re.split(r'[.!?]+', text)
+        claims = []
         
-        # If extraction failed, use simple heuristics
-        if not claims or len(claims[0]) < 10:
-            # Extract sentences with specific patterns
-            sentences = re.split(r'[.!?]+', text)
-            claims = []
-            for sentence in sentences[:3]:
-                sentence = sentence.strip()
-                if len(sentence) > 20 and any(word in sentence.lower() for word in 
-                    ['says', 'reports', 'according', 'claims', 'reveals', 'shows', 'study', 'research']):
-                    claims.append(sentence[:80])
-            
-            if not claims:
-                claims = [text[:80]]  # Fallback to beginning of text
+        # Look for sentences with claim indicators
+        claim_indicators = ['says', 'reports', 'according', 'claims', 'reveals', 'shows', 'study', 'research', 'announces', 'discovers', 'finds']
+        
+        for sentence in sentences[:5]:  # Check first 5 sentences
+            sentence = sentence.strip()
+            if len(sentence) > 20 and any(word in sentence.lower() for word in claim_indicators):
+                claims.append(sentence[:100])
+        
+        # If no claims found, use first few sentences
+        if not claims:
+            claims = [sent.strip()[:100] for sent in sentences[:3] if len(sent.strip()) > 20]
         
         return claims[:3]  # Return max 3 claims
-    
+        
     except Exception as e:
         logger.error(f"Error extracting claims: {str(e)}")
         return [text[:100]]
@@ -166,7 +391,6 @@ def extract_key_claims(text: str) -> List[str]:
 def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
     """Search for sources using web search API"""
     try:
-        # Using DuckDuckGo Instant Answer API (free alternative)
         search_url = f"https://api.duckduckgo.com/?q={quote(query)}&format=json&no_redirect=1&skip_disambig=1"
         
         response = requests.get(search_url, timeout=5)
@@ -174,7 +398,6 @@ def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
             data = response.json()
             sources = []
             
-            # Get abstract/instant answer
             if data.get('Abstract'):
                 sources.append({
                     'title': data.get('AbstractText', 'DuckDuckGo Search Result'),
@@ -183,7 +406,6 @@ def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
                     'relevance_score': 0.9
                 })
             
-            # Get related topics
             for topic in data.get('RelatedTopics', [])[:max_results-len(sources)]:
                 if isinstance(topic, dict) and topic.get('Text'):
                     sources.append({
@@ -195,7 +417,6 @@ def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
             
             return sources[:max_results]
         
-        # Fallback: return simulated credible sources
         return [{
             'title': f'Fact-check result for: {query[:50]}...',
             'url': 'https://factcheck.org',
@@ -213,24 +434,16 @@ async def search_fact_check_sources(claims: List[str]) -> tuple:
     search_queries = []
     
     for claim in claims:
-        # Create fact-check queries
-        queries = [
-            f'"{claim}" fact check',
-            f'{claim} verify truth',
-            f'{claim} snopes factcheck'
-        ]
+        query = f'"{claim}" fact check'
+        search_queries.append(query)
+        sources = search_web_sources(query, max_results=2)
         
-        for query in queries[:1]:  # Limit to 1 query per claim to avoid rate limits
-            search_queries.append(query)
-            sources = search_web_sources(query, max_results=2)
-            
-            for source in sources:
-                source['query'] = query
-                source['claim'] = claim
-                all_sources.append(source)
-            
-            # Small delay to avoid rate limiting
-            await asyncio.sleep(0.1)
+        for source in sources:
+            source['query'] = query
+            source['claim'] = claim
+            all_sources.append(source)
+        
+        await asyncio.sleep(0.1)
     
     # Remove duplicates and sort by relevance
     unique_sources = {}
@@ -241,87 +454,51 @@ async def search_fact_check_sources(claims: List[str]) -> tuple:
     
     sorted_sources = sorted(unique_sources.values(), key=lambda x: x['relevance_score'], reverse=True)
     
-    return sorted_sources[:5], search_queries  # Return top 5 sources
-
-def calibrate_confidence(raw_confidence: float, temperature: float = 2.0) -> float:
-    """Apply temperature scaling to calibrate confidence scores"""
-    # Temperature scaling: higher temperature = lower confidence
-    import math
-    calibrated = 1 / (1 + math.exp(-math.log(raw_confidence / (1 - raw_confidence)) / temperature))
-    
-    # Additional conservative adjustment
-    if calibrated > 0.95:
-        calibrated = 0.85 + (calibrated - 0.95) * 0.3  # Cap extreme confidence
-    elif calibrated > 0.9:
-        calibrated = 0.8 + (calibrated - 0.9) * 0.5   # Reduce high confidence
-    elif calibrated < 0.55:
-        calibrated = 0.55 + (calibrated - 0.5) * 0.2  # Avoid very low confidence
-    
-    return float(calibrated)
+    return sorted_sources[:5], search_queries
 
 def get_prediction(text: str):
     """Get prediction and confidence scores from the model"""
     try:
-        # Tokenize input - FIXED: Use same MAX_LENGTH as training
         inputs = tokenizer(
             text,
             return_tensors="pt",
-            max_length=MAX_LENGTH,  # Use 256 to match training
+            max_length=MAX_LENGTH,
             truncation=True,
             padding=True
         )
         
-        # Move to device
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        # Get prediction
         with torch.no_grad():
             outputs = model(**inputs)
             logits = outputs.logits
             
-            # FIXED: Apply temperature scaling to logits for better calibration
-            temperature = 1.5  # Higher = more conservative confidence
+            # Optional temperature scaling
+            temperature = 1.5
             scaled_logits = logits / temperature
-            
-            # Apply softmax to get probabilities
             probabilities = torch.nn.functional.softmax(scaled_logits, dim=-1)
             probabilities = probabilities.cpu().numpy()[0]
             
-            # Get predicted class
-            predicted_class = np.argmax(probabilities)
+            predicted_class = int(np.argmax(probabilities))
             raw_confidence = float(probabilities[predicted_class])
             
-            # Apply confidence calibration
-            confidence = calibrate_confidence(raw_confidence)
+            # Conservative calibration
+            confidence = min(raw_confidence * 0.9, 0.95)
             
-            # FIXED: Check the model's label mapping
-            # Based on your training code: 0 = Fake, 1 = Real
-            # But verify this matches your model's actual config
-            # if hasattr(model.config, 'id2label') and model.config.id2label:
-            #     labels = [model.config.id2label[0], model.config.id2label[1]]
-            # else:
-                # Default assumption based on training data
-            labels = ["Fake", "Real"]  # 0 = Fake, 1 = Real
+            # ✅ Use config mapping directly
+            prediction = model.config.id2label[predicted_class]
             
-            prediction = labels[predicted_class]
-            
-            # FIXED: Additional logic for ambiguous cases
+            # Extra handling for uncertain predictions
             prob_diff = abs(probabilities[0] - probabilities[1])
-            if prob_diff < 0.2:  # Very close scores
-                confidence = min(confidence, 0.65)  # Cap confidence for ambiguous cases
-                logger.info(f"Ambiguous case detected (diff: {prob_diff:.3f}), confidence capped at {confidence:.3f}")
+            if prob_diff < 0.2:
+                confidence = min(confidence, 0.65)
             
-            # Create raw scores dictionary with original probabilities
             raw_scores = {
-                "fake": float(probabilities[0]),  # Probability of being fake
-                "real": float(probabilities[1])   # Probability of being real
+                "fake": float(probabilities[0]),
+                "real": float(probabilities[1])
             }
             
-            # FIXED: Enhanced logging for debugging
-            logger.info(f"Text sample: '{text[:50]}...'")
-            logger.info(f"Raw probabilities - Fake: {probabilities[0]:.4f}, Real: {probabilities[1]:.4f}")
-            logger.info(f"Predicted class: {predicted_class} ({prediction})")
-            logger.info(f"Raw confidence: {raw_confidence:.4f}, Calibrated: {confidence:.4f}")
+            logger.info(f"Prediction: {prediction}, Confidence: {confidence:.3f}")
             
             return prediction, confidence, raw_scores
             
@@ -329,151 +506,20 @@ def get_prediction(text: str):
         logger.error(f"Error in prediction: {str(e)}")
         raise e
 
-async def get_source_based_explanation(text: str, prediction: str, confidence: float, sources: List[dict] = None):
-    """Generate explanation using FLAN-T5 model with source information"""
-    if explanation_model is None or explanation_tokenizer is None:
-        return f"This text is classified as {prediction.lower()} news with {confidence:.1%} confidence based on content analysis."
-    
-    try:
-        # Better source context preparation
-        source_context = ""
-        if sources and len(sources) > 0:
-            source_context = "\n\nVerification sources:\n"
-            for i, source in enumerate(sources[:2], 1):  # Limit to 2 sources to save tokens
-                title = source.get('title', 'Source')[:60]
-                snippet = source.get('snippet', '')[:80]
-                source_context += f"Source {i}: {title} - {snippet}\n"
-        
-        # Improved prompt structure for FLAN-T5
-        if prediction.lower() == "fake":
-            instruction = (
-                "Explain why this news article is likely fake or misleading. "
-                "Focus on factual inaccuracies, logical inconsistencies, or lack of credible sources."
-            )
-        else:
-            instruction = (
-                "Explain why this news article appears to be legitimate. "
-                "Focus on factual accuracy, credible sources, and logical consistency."
-            )
-        
-        # More structured prompt for FLAN-T5
-        prompt = (
-            f"{instruction}\n\n"
-            f"Article: {text[:300]}...\n"
-            f"Classification: {prediction} (confidence: {confidence:.1%})"
-            f"{source_context}\n\n"
-            f"Explanation:"
-        )
-        
-        logger.info(f"Explanation prompt length: {len(prompt)} chars")
-        
-        # Better tokenization
-        inputs = explanation_tokenizer(
-            prompt,
-            return_tensors="pt",
-            max_length=512,
-            truncation=True,
-            padding=True
-        )
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        # Improved generation parameters
-        with torch.no_grad():
-            outputs = explanation_model.generate(
-                **inputs,
-                max_length=200,
-                min_length=40,           # Ensure substantive explanations
-                do_sample=True,
-                top_p=0.85,             # More focused than 0.9
-                temperature=0.8,        # Better balance
-                num_beams=3,            # Add beam search
-                early_stopping=True,
-                pad_token_id=explanation_tokenizer.pad_token_id,
-                repetition_penalty=1.2, # Prevent repetition
-                no_repeat_ngram_size=2  # Prevent 2-gram repetition
-            )
-        
-        # Decode the response
-        explanation = explanation_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Better post-processing
-        # Remove the original prompt from the output (T5 sometimes includes it)
-        if "Explanation:" in explanation:
-            explanation = explanation.split("Explanation:")[-1].strip()
-        
-        # Clean up common artifacts and the original prompt text
-        explanation = re.sub(r'^(Explain why|Article:|Classification:).*?\n', '', explanation, flags=re.MULTILINE | re.DOTALL)
-        explanation = explanation.strip()
-        
-        # Better fallback detection and handling
-        if (len(explanation.strip()) < 20 or 
-            explanation.lower().startswith(text.lower()[:20]) or
-            explanation.lower().startswith(prompt.lower()[:20])):
-            
-            logger.warning("T5 explanation generation failed, using enhanced fallback")
-            
-            # Enhanced template explanation
-            if prediction.lower() == "fake":
-                explanation = (
-                    f"This content exhibits patterns commonly associated with misinformation, "
-                    f"such as unverified claims, sensational language, or lack of credible attribution. "
-                )
-            else:
-                explanation = (
-                    f"This article demonstrates characteristics of legitimate journalism, "
-                    f"including factual reporting style and verifiable information patterns. "
-                )
-            
-            # Add source-based context if available
-            if sources and len(sources) > 0:
-                explanation += (
-                    f"Cross-verification with {len(sources)} external sources "
-                    f"{'contradicts key claims' if prediction.lower() == 'fake' else 'supports the main assertions'} "
-                    f"presented in the article."
-                )
-        
-        # Final cleanup
-        explanation = re.sub(r'\s+', ' ', explanation).strip()
-        
-        # Ensure proper sentence ending
-        if explanation and not explanation.endswith(('.', '!', '?')):
-            explanation += '.'
-            
-        logger.info(f"Final explanation length: {len(explanation)} chars")
-        return explanation
-        
-    except Exception as e:
-        logger.error(f"Error generating explanation: {str(e)}")
-        
-        # More informative fallback
-        fallback = (
-            f"Analysis indicates this is {prediction.lower()} news with {confidence:.1%} confidence. "
-        )
-        
-        if sources:
-            fallback += (
-                f"Assessment included {len(sources)} verification sources "
-                f"for fact-checking and credibility analysis."
-            )
-        else:
-            fallback += "Classification based on content patterns and linguistic analysis."
-            
-        return fallback
-
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
     return HealthResponse(
         status="healthy",
         model_loaded=model is not None and tokenizer is not None,
-        explanation_model_loaded=explanation_model is not None,
-        search_enabled=True  # Always enabled with DuckDuckGo fallback
+        explanation_service_available=len(explanation_service.services) > 0,
+        search_enabled=True
     )
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_news(request: NewsRequest):
     """
-    Predict if news is fake or real with source-based explanations
+    Predict if news is fake or real with API-based explanations
     
     - **text**: The news text to analyze
     - **explain**: Whether to include LLM explanation (default: True)
@@ -486,26 +532,22 @@ async def predict_news(request: NewsRequest):
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
     try:
-        # Get prediction from your model
         prediction, confidence, raw_scores = get_prediction(request.text)
         
         sources = []
         search_queries = []
         explanation = None
         
-        # Search for sources if requested
         if request.search_sources and request.explain:
             logger.info("Extracting claims and searching for sources...")
             claims = extract_key_claims(request.text)
             sources, search_queries = await search_fact_check_sources(claims)
         
-        # Get explanation if requested
         if request.explain:
-            explanation = await get_source_based_explanation(
+            explanation = await explanation_service.get_explanation(
                 request.text, prediction, confidence, sources
             )
         
-        # Convert sources to SourceInfo objects
         source_info = []
         for source in sources:
             source_info.append(SourceInfo(
@@ -529,77 +571,42 @@ async def predict_news(request: NewsRequest):
         logger.error(f"Error in prediction endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-@app.get("/models/info")
-async def model_info():
-    """Get information about loaded models"""
+@app.get("/services")
+async def available_services():
+    """Get information about available explanation services"""
     return {
-        "classification_model": MODEL_NAME,
-        "explanation_model": EXPLANATION_MODEL,
-        "device": str(device),
-        "classification_loaded": model is not None,
-        "explanation_loaded": explanation_model is not None,
-        "search_enabled": True,
-        "timestamp": datetime.now().isoformat()
+        "available_services": explanation_service.services,
+        "total_services": len(explanation_service.services),
+        "services_info": {
+            "groq": "Fast inference, free tier available",
+            "openai": "High quality, requires API key",
+            "anthropic": "High quality, requires API key", 
+            "huggingface": "Free tier, inference API",
+            "ollama": "Local inference, no API costs"
+        }
     }
 
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
     return {
-        "message": "Factify API - Source-Based Fake News Detection",
-        "version": "2.0.0",
+        "message": "Factify API - Lightweight Fake News Detection",
+        "version": "3.0.0",
         "features": [
-            "AI-powered fake news classification",
-            "Source-based explanations",
-            "Web search integration",
-            "Fact-checking capabilities"
+            "Local BERT classification (lightweight)",
+            "API-based explanations (no local LLM storage)",
+            "Multiple explanation service fallbacks",
+            "Web search integration"
         ],
+        "storage_saved": "~3GB+ (no local explanation LLM)",
+        "available_services": len(explanation_service.services),
         "endpoints": {
             "health": "/health",
             "predict": "/predict",
-            "model_info": "/models/info",
+            "services": "/services",
             "docs": "/docs"
         }
     }
-
-# FIXED: Add a simple test endpoint for debugging
-@app.get("/test")
-async def test_prediction():
-    """Test endpoint to verify model predictions work correctly"""
-    if model is None:
-        return {"error": "Model not loaded"}
-    
-    # Test with both fake and real examples
-    test_cases = [
-        {
-            "text": "Scientists have discovered that vaccines contain microchips to control people's minds",
-            "expected": "Fake"
-        },
-        {
-            "text": "The World Health Organization announced new guidelines for COVID-19 vaccination schedules",
-            "expected": "Real"
-        }
-    ]
-    
-    results = []
-    for case in test_cases:
-        try:
-            prediction, confidence, raw_scores = get_prediction(case["text"])
-            results.append({
-                "text": case["text"][:50] + "...",
-                "expected": case["expected"],
-                "predicted": prediction,
-                "confidence": confidence,
-                "raw_scores": raw_scores,
-                "correct": prediction == case["expected"]
-            })
-        except Exception as e:
-            results.append({
-                "text": case["text"][:50] + "...",
-                "error": str(e)
-            })
-    
-    return {"test_results": results}
 
 if __name__ == "__main__":
     import uvicorn

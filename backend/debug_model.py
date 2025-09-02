@@ -1,487 +1,301 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, T5ForConditionalGeneration, T5Tokenizer
-from typing import Optional, List
-import logging
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import numpy as np
-import requests
-import re
-from urllib.parse import quote
-import asyncio
-from datetime import datetime
+import pandas as pd
+from sklearn.metrics import accuracy_score, classification_report
+import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Factify API", description="Fake news detection with source-based AI explanations")
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure this properly for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Request/Response models
-class NewsRequest(BaseModel):
-    text: str
-    explain: bool = True
-    search_sources: bool = True
-
-class SourceInfo(BaseModel):
-    title: str
-    url: str
-    snippet: str
-    relevance_score: float
-
-class PredictionResponse(BaseModel):
-    text: str
-    prediction: str
-    confidence_score: float
-    raw_scores: dict
-    explanation: Optional[str] = None
-    sources: Optional[List[SourceInfo]] = None
-    search_queries: Optional[List[str]] = None
-
-class HealthResponse(BaseModel):
-    status: str
-    model_loaded: bool
-    explanation_model_loaded: bool
-    search_enabled: bool
-
-# Global variables for model
-model = None
-tokenizer = None
-device = None
-explanation_model = None
-explanation_tokenizer = None
-
-# Configuration
-MODEL_NAME = "naheelkk/fake-news-bert-model"  # Replace with your HF model name
-EXPLANATION_MODEL = "google/flan-t5-small"
-MAX_LENGTH = 512
-SEARCH_API_KEY = None  # Set your search API key (Google Custom Search, Bing, etc.)
-SEARCH_ENGINE_ID = None  # Set your search engine ID
-
-@app.on_event("startup")
-async def load_model():
-    """Load the model and tokenizer on startup"""
-    global model, tokenizer, device, explanation_model, explanation_tokenizer
+class ModelDebugger:
+    """Debug and fix the fake news detection model"""
     
-    try:
-        logger.info(f"Loading classification model: {MODEL_NAME}")
-        
-        # Set device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Using device: {device}")
-        
-        # Load tokenizer and model for classification
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-        model.to(device)
-        model.eval()
-        
-        logger.info("Classification model loaded successfully!")
-        
-        # Load explanation model (T5 for instruction following)
+    def __init__(self, model_path):
+        self.model_path = model_path
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = None
+        self.tokenizer = None
+        self.load_model()
+    
+    def load_model(self):
+        """Load the model and tokenizer"""
         try:
-            logger.info(f"Loading explanation model: {EXPLANATION_MODEL}")
-            explanation_tokenizer = T5Tokenizer.from_pretrained(EXPLANATION_MODEL)
-            explanation_model = T5ForConditionalGeneration.from_pretrained(EXPLANATION_MODEL)
-            explanation_model.to(device)
-            explanation_model.eval()
-            logger.info("Explanation model loaded successfully!")
+            logger.info(f"Loading model from: {self.model_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_path)
+            self.model.to(self.device)
+            self.model.eval()
+            
+            # Print model configuration
+            logger.info(f"Model config: {self.model.config}")
+            logger.info(f"Number of labels: {self.model.config.num_labels}")
+            
+            if hasattr(self.model.config, 'id2label'):
+                logger.info(f"ID to Label mapping: {self.model.config.id2label}")
+            if hasattr(self.model.config, 'label2id'):
+                logger.info(f"Label to ID mapping: {self.model.config.label2id}")
+                
         except Exception as e:
-            logger.warning(f"Could not load explanation model: {str(e)}")
-            explanation_model = None
-            explanation_tokenizer = None
-        
-    except Exception as e:
-        logger.error(f"Error loading model: {str(e)}")
-        raise e
-
-def extract_key_claims(text: str) -> List[str]:
-    """Extract key claims from the news text for fact-checking"""
-    try:
-        # Use FLAN-T5 to extract key claims
-        if explanation_model is None:
-            return [text[:100]]  # Fallback
-        
-        prompt = f"Extract 2-3 key factual claims from this news text that can be fact-checked:\n\n{text[:400]}\n\nKey claims:"
-        
-        inputs = explanation_tokenizer.encode(prompt, return_tensors="pt", max_length=512, truncation=True)
-        inputs = inputs.to(device)
-        
-        with torch.no_grad():
-            outputs = explanation_model.generate(
-                inputs,
-                max_length=100,
-                num_beams=3,
-                temperature=0.3,
-                do_sample=False,
-                early_stopping=True,
-                pad_token_id=explanation_tokenizer.pad_token_id
+            logger.error(f"Error loading model: {str(e)}")
+            raise e
+    
+    def predict_single(self, text, max_length=256, debug=True):
+        """Make a single prediction with detailed debugging"""
+        try:
+            # Tokenize
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                max_length=max_length,
+                truncation=True,
+                padding=True
             )
-        
-        claims_text = explanation_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Split claims into list
-        claims = [claim.strip() for claim in claims_text.split('\n') if claim.strip()]
-        
-        # If extraction failed, use simple heuristics
-        if not claims or len(claims[0]) < 10:
-            # Extract sentences with specific patterns
-            sentences = re.split(r'[.!?]+', text)
-            claims = []
-            for sentence in sentences[:3]:
-                sentence = sentence.strip()
-                if len(sentence) > 20 and any(word in sentence.lower() for word in 
-                    ['says', 'reports', 'according', 'claims', 'reveals', 'shows', 'study', 'research']):
-                    claims.append(sentence[:80])
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
-            if not claims:
-                claims = [text[:80]]  # Fallback to beginning of text
-        
-        return claims[:3]  # Return max 3 claims
+            if debug:
+                logger.info(f"Input text: {text[:100]}...")
+                logger.info(f"Tokenized length: {inputs['input_ids'].shape}")
+            
+            # Get model outputs
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                logits = outputs.logits
+                
+                if debug:
+                    logger.info(f"Raw logits: {logits}")
+                
+                # Apply softmax to get probabilities
+                probabilities = torch.nn.functional.softmax(logits, dim=-1)
+                probabilities = probabilities.cpu().numpy()[0]
+                
+                if debug:
+                    logger.info(f"Probabilities: {probabilities}")
+                
+                # Get predicted class
+                predicted_class = np.argmax(probabilities)
+                confidence = float(probabilities[predicted_class])
+                
+                # Map to labels
+                if hasattr(self.model.config, 'id2label') and self.model.config.id2label:
+                    label_mapping = self.model.config.id2label
+                    prediction = label_mapping[predicted_class]
+                else:
+                    # Default mapping based on training data
+                    labels = ["FAKE", "REAL"]  # or ["Fake", "Real"]
+                    prediction = labels[predicted_class]
+                
+                if debug:
+                    logger.info(f"Predicted class: {predicted_class}")
+                    logger.info(f"Prediction: {prediction}")
+                    logger.info(f"Confidence: {confidence:.4f}")
+                
+                return {
+                    "prediction": prediction,
+                    "predicted_class": predicted_class,
+                    "confidence": confidence,
+                    "probabilities": {
+                        "class_0": float(probabilities[0]),
+                        "class_1": float(probabilities[1])
+                    },
+                    "raw_logits": logits.cpu().numpy()[0].tolist()
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in prediction: {str(e)}")
+            raise e
     
-    except Exception as e:
-        logger.error(f"Error extracting claims: {str(e)}")
-        return [text[:100]]
-
-def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
-    """Search for sources using web search API"""
-    try:
-        # Using DuckDuckGo Instant Answer API (free alternative)
-        search_url = f"https://api.duckduckgo.com/?q={quote(query)}&format=json&no_redirect=1&skip_disambig=1"
+    def test_known_samples(self):
+        """Test with known fake and real samples"""
         
-        response = requests.get(search_url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            sources = []
-            
-            # Get abstract/instant answer
-            if data.get('Abstract'):
-                sources.append({
-                    'title': data.get('AbstractText', 'DuckDuckGo Search Result'),
-                    'url': data.get('AbstractURL', 'https://duckduckgo.com'),
-                    'snippet': data.get('Abstract', '')[:200],
-                    'relevance_score': 0.9
-                })
-            
-            # Get related topics
-            for topic in data.get('RelatedTopics', [])[:max_results-len(sources)]:
-                if isinstance(topic, dict) and topic.get('Text'):
-                    sources.append({
-                        'title': topic.get('Text', '')[:50] + '...',
-                        'url': topic.get('FirstURL', 'https://duckduckgo.com'),
-                        'snippet': topic.get('Text', '')[:200],
-                        'relevance_score': 0.7
-                    })
-            
-            return sources[:max_results]
-        
-        # Fallback: return simulated credible sources
-        return [{
-            'title': f'Fact-check result for: {query[:50]}...',
-            'url': 'https://factcheck.org',
-            'snippet': f'Search results for "{query}" - verify with multiple credible sources.',
-            'relevance_score': 0.5
-        }]
-        
-    except Exception as e:
-        logger.error(f"Web search error: {str(e)}")
-        return []
-
-async def search_fact_check_sources(claims: List[str]) -> tuple:
-    """Search for fact-checking sources for the claims"""
-    all_sources = []
-    search_queries = []
-    
-    for claim in claims:
-        # Create fact-check queries
-        queries = [
-            f'"{claim}" fact check',
-            f'{claim} verify truth',
-            f'{claim} snopes factcheck'
+        # Test cases with expected labels
+        test_cases = [
+            {
+                "text": "Scientists have discovered that vaccines contain microchips designed to control people's minds and track their movements through 5G networks",
+                "expected": "FAKE",
+                "category": "conspiracy"
+            },
+            {
+                "text": "Breaking: Aliens have landed in Times Square and are demanding to speak to world leaders immediately",
+                "expected": "FAKE", 
+                "category": "sensational"
+            },
+            {
+                "text": "Apple Inc. reported quarterly earnings that exceeded analyst expectations, with revenue reaching $94.8 billion in Q2 2024",
+                "expected": "REAL",
+                "category": "business"
+            },
+            {
+                "text": "The World Health Organization announced new guidelines for COVID-19 vaccination schedules based on recent research findings",
+                "expected": "REAL",
+                "category": "health"
+            },
+            {
+                "text": "Researchers at Stanford University published a study in Nature showing improved methods for renewable energy storage",
+                "expected": "REAL",
+                "category": "science"
+            }
         ]
         
-        for query in queries[:1]:  # Limit to 1 query per claim to avoid rate limits
-            search_queries.append(query)
-            sources = search_web_sources(query, max_results=2)
-            
-            for source in sources:
-                source['query'] = query
-                source['claim'] = claim
-                all_sources.append(source)
-            
-            # Small delay to avoid rate limiting
-            await asyncio.sleep(0.1)
-    
-    # Remove duplicates and sort by relevance
-    unique_sources = {}
-    for source in all_sources:
-        url = source['url']
-        if url not in unique_sources or source['relevance_score'] > unique_sources[url]['relevance_score']:
-            unique_sources[url] = source
-    
-    sorted_sources = sorted(unique_sources.values(), key=lambda x: x['relevance_score'], reverse=True)
-    
-    return sorted_sources[:5], search_queries  # Return top 5 sources
-
-def calibrate_confidence(raw_confidence: float, temperature: float = 2.0) -> float:
-    """Apply temperature scaling to calibrate confidence scores"""
-    # Temperature scaling: higher temperature = lower confidence
-    import math
-    calibrated = 1 / (1 + math.exp(-math.log(raw_confidence / (1 - raw_confidence)) / temperature))
-    
-    # Additional conservative adjustment
-    if calibrated > 0.95:
-        calibrated = 0.85 + (calibrated - 0.95) * 0.3  # Cap extreme confidence
-    elif calibrated > 0.9:
-        calibrated = 0.8 + (calibrated - 0.9) * 0.5   # Reduce high confidence
-    elif calibrated < 0.55:
-        calibrated = 0.55 + (calibrated - 0.5) * 0.2  # Avoid very low confidence
-    
-    return float(calibrated)
-
-def get_prediction(text: str):
-    """Get prediction and confidence scores from the model"""
-    temperature = 0.7,
-    prob_diff < 0.3,
-    confidence = min(confidence,0.65)
-    try:
-        # Tokenize input
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            max_length=MAX_LENGTH,
-            truncation=True,
-            padding=True
-        )
+        results = []
+        correct_predictions = 0
         
-        # Move to device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        logger.info("Testing model with known samples...")
+        logger.info("="*60)
         
-        # Get prediction
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits
+        for i, case in enumerate(test_cases, 1):
+            result = self.predict_single(case["text"], debug=False)
             
-            # Apply temperature scaling to logits for better calibration
-            temperature = 1.5  # Higher = more conservative confidence
-            scaled_logits = logits / temperature
+            # Normalize predictions for comparison
+            predicted = result["prediction"].upper()
+            expected = case["expected"].upper()
             
-            # Apply softmax to get probabilities
-            probabilities = torch.nn.functional.softmax(scaled_logits, dim=-1)
-            probabilities = probabilities.cpu().numpy()[0]
+            is_correct = predicted == expected
+            if is_correct:
+                correct_predictions += 1
             
-            # Get predicted class
-            predicted_class = np.argmax(probabilities)
-            raw_confidence = float(probabilities[predicted_class])
+            logger.info(f"Test {i}: {case['category'].upper()}")
+            logger.info(f"Expected: {expected}")
+            logger.info(f"Predicted: {predicted}")
+            logger.info(f"Confidence: {result['confidence']:.4f}")
+            logger.info(f"Correct: {'✓' if is_correct else '✗'}")
+            logger.info(f"Probabilities: {result['probabilities']}")
+            logger.info("-" * 40)
             
-            # Apply confidence calibration
-            confidence = calibrate_confidence(raw_confidence)
+            results.append({
+                **case,
+                **result,
+                "is_correct": is_correct
+            })
+        
+        accuracy = correct_predictions / len(test_cases)
+        logger.info(f"Overall Accuracy: {accuracy:.2%} ({correct_predictions}/{len(test_cases)})")
+        
+        return results, accuracy
+    
+    def diagnose_label_mapping_issue(self):
+        """Diagnose potential label mapping issues"""
+        logger.info("Diagnosing label mapping issues...")
+        logger.info("="*50)
+        
+        # Check if labels are swapped
+        fake_sample = "This is obviously fake news with wild conspiracy theories"
+        real_sample = "The stock market closed higher today with tech stocks leading gains"
+        
+        fake_result = self.predict_single(fake_sample, debug=False)
+        real_result = self.predict_single(real_sample, debug=False)
+        
+        logger.info("DIAGNOSIS RESULTS:")
+        logger.info(f"Fake sample predicted as: {fake_result['prediction']} (class {fake_result['predicted_class']})")
+        logger.info(f"Real sample predicted as: {real_result['prediction']} (class {real_result['predicted_class']})")
+        
+        # Check if labels might be swapped
+        if (fake_result['prediction'].upper() == 'REAL' and 
+            real_result['prediction'].upper() == 'FAKE'):
+            logger.warning("🚨 LABELS APPEAR TO BE SWAPPED! 🚨")
+            logger.warning("The model is predicting opposite of expected results")
+            return True
+        
+        return False
+    
+    def fix_label_mapping(self):
+        """Fix label mapping in model config"""
+        logger.info("Attempting to fix label mapping...")
+        
+        # Update the model's label mapping
+        if hasattr(self.model.config, 'id2label'):
+            original_mapping = self.model.config.id2label.copy()
+            logger.info(f"Original mapping: {original_mapping}")
             
-            # Map class to label (adjust based on your model's labels)
-            # Check if your model outputs [REAL, FAKE] or [FAKE, REAL]
-            labels = ["Real", "Fake"]  # Update this based on your model
-            prediction = labels[predicted_class]
-            
-            # Additional logic: if confidence is very close, be more conservative
-            prob_diff = abs(probabilities[0] - probabilities[1])
-            if prob_diff < 0.2:  # Very close scores
-                confidence = min(confidence, 0.65)  # Cap confidence for ambiguous cases
-                logger.info(f"Ambiguous case detected (diff: {prob_diff:.3f}), confidence capped at {confidence:.3f}")
-            
-            # Create raw scores dictionary with original probabilities
-            raw_scores = {
-                "real": float(probabilities[0]),
-                "fake": float(probabilities[1])
+            # Swap the labels
+            self.model.config.id2label = {
+                0: "REAL" if original_mapping.get(0) == "FAKE" else "FAKE",
+                1: "FAKE" if original_mapping.get(1) == "REAL" else "REAL"
             }
             
-            # Log for debugging
-            logger.info(f"Prediction: {prediction}, Raw confidence: {raw_confidence:.3f}, Calibrated: {confidence:.3f}")
+            # Also update label2id if it exists
+            if hasattr(self.model.config, 'label2id'):
+                self.model.config.label2id = {v: k for k, v in self.model.config.id2label.items()}
             
-            return prediction, confidence, raw_scores
+            logger.info(f"New mapping: {self.model.config.id2label}")
             
-    except Exception as e:
-        logger.error(f"Error in prediction: {str(e)}")
-        raise e
-
-async def get_source_based_explanation(text: str, prediction: str, confidence: float, sources: List[dict] = None):
-    """Generate explanation using FLAN-T5 model with source information"""
-    if explanation_model is None or explanation_tokenizer is None:
-        return f"This text is classified as {prediction.lower()} news with {confidence:.1%} confidence based on content analysis."
+            return True
+        else:
+            logger.warning("No id2label mapping found in config")
+            # Create a new mapping
+            self.model.config.id2label = {0: "FAKE", 1: "REAL"}
+            self.model.config.label2id = {"FAKE": 0, "REAL": 1}
+            logger.info("Created new label mapping")
+            return True
     
-    try:
-        # Prepare source information for the prompt
-        source_context = ""
-        if sources:
-            source_context = "\n\nRelevant sources found:\n"
-            for i, source in enumerate(sources[:3], 1):
-                source_context += f"{i}. {source.get('title', 'Source')}: {source.get('snippet', '')[:100]}...\n"
-        
-        # Create instruction prompt for FLAN-T5
-        prompt = f"""Analyze this news text and explain why it's classified as {prediction.lower()} news with {confidence:.1%} confidence.
-        
-        News text: {text[:300]}
-        {source_context}
-        
-        Provide a brief explanation focusing on:
-        1. Content credibility based on available sources
-        2. Language patterns and style indicators
-        3. Verifiability of claims made
-        
-        Reference sources when possible. Keep explanation informative but concise.
-        
-        Explanation:"""
-        
-        # Tokenize the prompt
-        inputs = explanation_tokenizer.encode(prompt, return_tensors="pt", max_length=512, truncation=True)
-        inputs = inputs.to(device)
-        
-        # Generate explanation
-        with torch.no_grad():
-            outputs = explanation_model.generate(
-                inputs,
-                max_length=200,
-                min_length=30,
-                num_beams=4,
-                temperature=0.7,
-                do_sample=True,
-                early_stopping=True,
-                pad_token_id=explanation_tokenizer.pad_token_id
-            )
-        
-        # Decode the response
-        explanation = explanation_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Clean up explanation
-        if len(explanation.strip()) < 15:
-            explanation = f"This text shows characteristics typical of {prediction.lower()} news. "
-            if sources:
-                explanation += f"Based on {len(sources)} fact-checking sources, "
-                if prediction.lower() == "fake":
-                    explanation += "the claims appear unsubstantiated or contradicted by reliable sources."
-                else:
-                    explanation += "the information aligns with credible reporting and verified facts."
-        
-        return explanation.strip()
-        
-    except Exception as e:
-        logger.error(f"Error generating explanation: {str(e)}")
-        fallback = f"Analysis indicates this is {prediction.lower()} news with {confidence:.1%} confidence."
-        if sources:
-            fallback += f" Based on {len(sources)} sources consulted for verification."
-        return fallback
+    def save_corrected_model(self, save_path):
+        """Save the model with corrected label mapping"""
+        try:
+            logger.info(f"Saving corrected model to: {save_path}")
+            self.model.save_pretrained(save_path)
+            self.tokenizer.save_pretrained(save_path)
+            logger.info("Model saved successfully!")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving model: {str(e)}")
+            return False
 
-@app.get("/health", response_model=HealthResponse)
-async def health_check():
-    """Health check endpoint"""
-    return HealthResponse(
-        status="healthy",
-        model_loaded=model is not None and tokenizer is not None,
-        explanation_model_loaded=explanation_model is not None,
-        search_enabled=True  # Always enabled with DuckDuckGo fallback
-    )
-
-@app.post("/predict", response_model=PredictionResponse)
-async def predict_news(request: NewsRequest):
-    """
-    Predict if news is fake or real with source-based explanations
+def main():
+    """Main debugging and fixing function"""
     
-    - **text**: The news text to analyze
-    - **explain**: Whether to include LLM explanation (default: True)
-    - **search_sources**: Whether to search for supporting sources (default: True)
-    """
-    if model is None or tokenizer is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    # UPDATE THIS PATH TO YOUR MODEL LOCATION
+    model_path = "naheelkk/fake-news-bert-model"  # or your HuggingFace model name
     
-    if not request.text or len(request.text.strip()) == 0:
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    debugger = ModelDebugger(model_path)
     
-    try:
-        # Get prediction from your model
-        prediction, confidence, raw_scores = get_prediction(request.text)
+    # Step 1: Test current model performance
+    logger.info("STEP 1: Testing current model performance")
+    results, accuracy = debugger.test_known_samples()
+    
+    # Step 2: Diagnose label mapping issues
+    logger.info("\nSTEP 2: Diagnosing label mapping issues")
+    labels_swapped = debugger.diagnose_label_mapping_issue()
+    
+    # Step 3: Fix if needed
+    if labels_swapped or accuracy < 0.6:
+        logger.info("\nSTEP 3: Fixing label mapping")
+        debugger.fix_label_mapping()
         
-        sources = []
-        search_queries = []
-        explanation = None
+        # Test again after fix
+        logger.info("\nSTEP 4: Testing after fix")
+        results_after_fix, accuracy_after_fix = debugger.test_known_samples()
         
-        # Search for sources if requested
-        if request.search_sources and request.explain:
-            logger.info("Extracting claims and searching for sources...")
-            claims = extract_key_claims(request.text)
-            sources, search_queries = await search_fact_check_sources(claims)
-        
-        # Get explanation if requested
-        if request.explain:
-            explanation = await get_source_based_explanation(
-                request.text, prediction, confidence, sources
-            )
-        
-        # Convert sources to SourceInfo objects
-        source_info = []
-        for source in sources:
-            source_info.append(SourceInfo(
-                title=source.get('title', ''),
-                url=source.get('url', ''),
-                snippet=source.get('snippet', ''),
-                relevance_score=source.get('relevance_score', 0.0)
-            ))
-        
-        return PredictionResponse(
-            text=request.text,
-            prediction=prediction,
-            confidence_score=confidence,
-            raw_scores=raw_scores,
-            explanation=explanation,
-            sources=source_info if request.search_sources else None,
-            search_queries=search_queries if request.search_sources else None
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in prediction endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
-
-@app.get("/models/info")
-async def model_info():
-    """Get information about loaded models"""
-    return {
-        "classification_model": MODEL_NAME,
-        "explanation_model": EXPLANATION_MODEL,
-        "device": str(device),
-        "classification_loaded": model is not None,
-        "explanation_loaded": explanation_model is not None,
-        "search_enabled": True,
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/")
-async def root():
-    """Root endpoint with API information"""
-    return {
-        "message": "Factify API - Source-Based Fake News Detection",
-        "version": "2.0.0",
-        "features": [
-            "AI-powered fake news classification",
-            "Source-based explanations",
-            "Web search integration",
-            "Fact-checking capabilities"
-        ],
-        "endpoints": {
-            "health": "/health",
-            "predict": "/predict",
-            "model_info": "/models/info",
-            "docs": "/docs"
-        }
-    }
+        if accuracy_after_fix > accuracy:
+            logger.info(f"✅ Improvement detected! Accuracy: {accuracy:.2%} → {accuracy_after_fix:.2%}")
+            
+            # Save corrected model
+            corrected_model_path = model_path.rstrip('/') + "_corrected/"
+            if debugger.save_corrected_model(corrected_model_path):
+                logger.info(f"✅ Corrected model saved to: {corrected_model_path}")
+                logger.info("Update your API to use this corrected model!")
+            
+        else:
+            logger.warning("No improvement after label fix. Issue might be deeper.")
+    else:
+        logger.info("✅ Model appears to be working correctly!")
+    
+    return debugger
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Run the debugging
+    debugger = main()
+    
+    # Test specific case from your screenshot
+    print("\n" + "="*60)
+    print("TESTING YOUR SPECIFIC CASE:")
+    print("="*60)
+    
+    apple_text = """Apple Inc. reported quarterly earnings that exceeded analyst expectations, with revenue reaching $94.8 billion in Q2 2024. The company's iPhone sales showed a 5% increase compared to the previous year. CEO Tim Cook attributed the growth to strong international demand and new product features."""
+    
+    result = debugger.predict_single(apple_text)
+    print(f"Your Apple news sample:")
+    print(f"Predicted: {result['prediction']}")
+    print(f"Confidence: {result['confidence']:.1%}")
+    print(f"Should be: REAL")
+    print(f"Correct: {'✅' if result['prediction'].upper() == 'REAL' else '❌'}")
