@@ -67,7 +67,7 @@ device = None
 # OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Set via environment variable
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # Free tier available
 # ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-# HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")  # Free inference API
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")  # Free inference API
 
 # Model configuration
 MODEL_NAME = "naheelkk/fake-news-bert-model"
@@ -116,8 +116,8 @@ class ExplanationService:
         #     self.services.append("anthropic")
         #     self.anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             
-        # if HUGGINGFACE_API_KEY:
-        #     self.services.append("huggingface")
+        if HUGGINGFACE_API_KEY:
+            self.services.append("huggingface")
     
     async def generate_explanation_openai(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
         """Generate explanation using OpenAI API (GPT-3.5/GPT-4)"""
@@ -187,7 +187,7 @@ class ExplanationService:
                     {"role": "system", "content": "You are an expert fact-checker and media analyst."},
                     {"role": "user", "content": prompt}
                 ],
-                model="llama3-8b-8192",  # Fast and free
+                model="llama-3.1-8b-instant",  # Fast and free
                 max_tokens=150,
                 temperature=0.3
             )
@@ -255,7 +255,7 @@ class ExplanationService:
                 }
             }
             
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=10)
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
             
             if response.status_code == 200:
                 result = response.json()
@@ -272,7 +272,7 @@ class ExplanationService:
         """Generate explanation using local Ollama (if running)"""
         try:
             # Check if Ollama is running locally
-            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            response = requests.get("http://localhost:11434/api/tags", timeout=10)
             if response.status_code != 200:
                 return None
             
@@ -290,7 +290,7 @@ class ExplanationService:
             """
             
             payload = {
-                "model": "llama3.1:8b",  # or whatever model you have
+                "model": "gemma3:latest",  # or whatever model you have
                 "prompt": prompt,
                 "stream": False,
                 "options": {
@@ -308,6 +308,7 @@ class ExplanationService:
             return None
             
         except Exception as e:
+            logger.warning(f"Ollama error {str(e)}")
             logger.debug(f"Ollama not available: {str(e)}")
             return None
     
@@ -316,10 +317,10 @@ class ExplanationService:
         
         # Service priority order (most reliable first)
         service_methods = [
+            ("ollama", self.generate_explanation_ollama),  # Local, no API costs
             ("groq", self.generate_explanation_groq),  # Fast and often free
             ("openai", self.generate_explanation_openai),  # High quality
             ("anthropic", self.generate_explanation_anthropic),  # High quality
-            ("ollama", self.generate_explanation_ollama),  # Local, no API costs
             ("huggingface", self.generate_explanation_huggingface),  # Free tier
         ]
         
@@ -393,7 +394,7 @@ def search_web_sources(query: str, max_results: int = 3) -> List[dict]:
     try:
         search_url = f"https://api.duckduckgo.com/?q={quote(query)}&format=json&no_redirect=1&skip_disambig=1"
         
-        response = requests.get(search_url, timeout=5)
+        response = requests.get(search_url, timeout=15)
         if response.status_code == 200:
             data = response.json()
             sources = []
