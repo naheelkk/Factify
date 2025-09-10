@@ -73,7 +73,7 @@ HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")  # For better web search
 
 # Model configuration
-MODEL_NAME = "naheelkk/fake-news-bert-liar"
+MODEL_NAME = "naheelkk/fake-news-bert-isot"
 MAX_LENGTH = 256
 
 class EnhancedExplanationService:
