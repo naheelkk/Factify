@@ -15,6 +15,9 @@ from contextlib import asynccontextmanager
 import os
 from groq import Groq
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -146,37 +149,71 @@ Explanation:"""
             return None
     
     async def generate_explanation_huggingface(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
-        """Enhanced HuggingFace explanation using a better model"""
+        """Generate explanation using Hugging Face's flan-t5-large (instruction-tuned model)"""
         try:
-            # Use a more suitable model for text generation
-            API_URL = "https://api-inference.huggingface.co/models/facebook/blenderbot-400M-distill"
+            API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
             headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-            
-            source_info = f" (verified with {len(sources)} sources)" if sources else ""
-            
+
+            source_context = ""
+            if sources and len(sources) > 0:
+                source_context = f" Based on {len(sources)} external verification sources."
+
+            # 💡 Optimized for FLAN-T5: instruction-style, clear task definition
+            prompt = f"""As a fact-checking expert, explain in 2-3 sentences why the following news excerpt is classified as '{prediction}' with {confidence:.1%} confidence.{source_context}
+
+Excerpt: "{text[:200]}..."
+
+Focus on:
+- Language patterns and tone
+- Source credibility indicators
+- Consistency with known facts
+
+Explanation:"""
+
             payload = {
-                "inputs": f"Why is this news article {prediction.lower()}? {text[:150]}...",
+                "inputs": prompt,
                 "parameters": {
-                    "max_length": 100,
+                    "max_new_tokens": 120,
                     "temperature": 0.3,
-                    "do_sample": True
+                    "do_sample": False,           # Deterministic for consistent quality
+                    "return_full_text": False     # Only return generated text
                 },
-                "options": {"wait_for_model": True}
+                "options": {
+                    "wait_for_model": True,
+                    "use_cache": False
+                }
             }
-            
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
-            
+
+            logger.info("📡 Calling Hugging Face API with optimized prompt...")
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=45)  # Allow cold start
+
             if response.status_code == 200:
                 result = response.json()
+                # Uncomment below for detailed debugging
+                # logger.debug(f"📡 Hugging Face raw response: {result}")
+
+                # Handle different possible response formats
                 if isinstance(result, list) and len(result) > 0:
-                    return result[0].get('generated_text', '').strip()
+                    explanation = result[0].get('generated_text', '').strip()
                 elif isinstance(result, dict) and 'generated_text' in result:
-                    return result['generated_text'].strip()
-            
-            return None
-            
+                    explanation = result['generated_text'].strip()
+                else:
+                    explanation = ""
+
+                # Validate useful output
+                if explanation and len(explanation.strip()) > 10:
+                    logger.info("✅ Hugging Face successfully generated explanation.")
+                    return explanation
+                else:
+                    logger.warning("⚠️ Hugging Face returned empty/short/unusable explanation.")
+                    return None
+
+            else:
+                logger.error(f"❌ Hugging Face API error {response.status_code}: {response.text}")
+                return None
+
         except Exception as e:
-            logger.error(f"HuggingFace API error: {str(e)}")
+            logger.error(f"❌ Hugging Face generation failed: {str(e)}")
             return None
     
     async def check_ollama_availability(self) -> bool:
@@ -234,11 +271,11 @@ Provide a brief, factual explanation (2 sentences max):"""
             logger.info("📋 Using cached explanation")
             return self.explanation_cache[cache_key]
         
-        # Service priority: local -> free -> paid
+        # Service priority: Hugging Face → Groq → Ollama
         service_methods = [
-            ("ollama", self.generate_explanation_ollama),
-            ("groq", self.generate_explanation_groq),
             ("huggingface", self.generate_explanation_huggingface),
+            ("groq", self.generate_explanation_groq),
+            ("ollama", self.generate_explanation_ollama)
         ]
         
         for service_name, method in service_methods:
@@ -256,7 +293,7 @@ Provide a brief, factual explanation (2 sentences max):"""
                     continue
         
         # Enhanced fallback explanation
-        logger.info("📝 Using enhanced template explanation")
+        logger.info("📝 All AI services failed or skipped. Using template explanation.")
         explanation = self.get_enhanced_template_explanation(text, prediction, confidence, sources)
         self.explanation_cache[cache_key] = explanation
         return explanation
@@ -497,16 +534,6 @@ def get_enhanced_prediction(text: str):
             predicted_class = int(np.argmax(probabilities))
             confidence = float(probabilities[predicted_class])
             
-            # Multi-stage confidence adjustment
-            prob_diff = abs(probabilities[0] - probabilities[1])
-            
-            # if prob_diff < 0.15:  # Very close probabilities
-            #     confidence = min(raw_confidence * 0.75, 0.6)
-            # elif prob_diff < 0.3:  # Somewhat close
-            #     confidence = min(raw_confidence * 0.85, 0.75)
-            # else:  # Clear separation
-            #     confidence = min(raw_confidence * 0.92, 0.95)
-            
             prediction = model_components.model.config.id2label[predicted_class]
             
             raw_scores = {
@@ -704,7 +731,7 @@ async def root():
         ],
         "features": [
             "🤖 Local BERT classification (lightweight)",
-            "💡 Multi-AI explanation services",
+            "💡 Multi-AI explanation services (HF → Groq → Ollama)",
             "🔍 Advanced fact-checking source search",
             "⚡ Smart caching for performance",
             "🛡️ Enhanced confidence calibration"
