@@ -30,7 +30,93 @@ An advanced fake news detection system that combines BERT-based classification w
 - **Sample Testing**: Pre-loaded examples for quick testing
 - **Charts & Graphs**: Interactive confidence gauges and score visualization
 
-## 🏗️ Architecture
+## 🏗️ System Architecture
+
+```mermaid
+graph TB
+    subgraph "Frontend Layer"
+        UI[Streamlit Web Interface]
+        UI --> |HTTP Requests| API
+    end
+    
+    subgraph "API Layer"
+        API[FastAPI Backend]
+        API --> |Load Model| BERT[BERT Classification Model]
+        API --> |Generate Explanations| EXP[Enhanced Explanation Service]
+        API --> |Search Sources| SEARCH[Web Search Service]
+    end
+    
+    subgraph "AI Services"
+        EXP --> GROQ[Groq AI API]
+        EXP --> HF[Hugging Face API]
+        EXP --> OLLAMA[Ollama Local LLM]
+    end
+    
+    subgraph "External Services"
+        SEARCH --> SERP[SerpAPI]
+        SEARCH --> DUCK[DuckDuckGo]
+        SEARCH --> FACT[Fact-Check Sites]
+    end
+    
+    subgraph "Model Layer"
+        BERT --> TOKENIZER[AutoTokenizer]
+        BERT --> CLASSIFIER[BERT Classifier]
+        CLASSIFIER --> |Predictions| CALIB[Confidence Calibration]
+    end
+    
+    subgraph "Data Flow"
+        INPUT[News Article Text] --> API
+        API --> PROCESS[Text Processing]
+        PROCESS --> PREDICT[Prediction + Confidence]
+        PREDICT --> EXPLAIN[AI Explanation]
+        EXPLAIN --> VERIFY[Source Verification]
+        VERIFY --> OUTPUT[Final Results]
+    end
+```
+
+### Architecture Components
+
+#### 🎯 **Frontend (Streamlit)**
+- Interactive web interface for news analysis
+- Real-time prediction visualization
+- Sample article testing
+- Results dashboard with charts
+
+#### 🔧 **Backend API (FastAPI)**
+- RESTful API with automatic documentation
+- Async request handling
+- Model loading and management
+- Response caching and optimization
+
+#### 🤖 **BERT Classification Pipeline**
+- Pre-trained BERT model fine-tuned for fake news detection
+- Advanced tokenization and text preprocessing
+- Temperature-scaled confidence calibration
+- Label mapping correction system
+
+#### 💡 **Multi-Service AI Explanations**
+- **Primary**: Hugging Face Inference API (FLAN-T5)
+- **Secondary**: Groq API (Llama 3.1)
+- **Tertiary**: Ollama (Local LLM)
+- Smart fallback with caching
+
+#### 🔍 **Fact-Checking Verification**
+- Claim extraction using NLP patterns
+- Multi-source web search (SerpAPI, DuckDuckGo)
+- Relevance scoring and source ranking
+- Integration with fact-checking websites
+
+### Data Flow Process
+
+1. **Input Processing**: User submits news article through web interface
+2. **Text Analysis**: BERT model processes and classifies the content
+3. **Confidence Scoring**: Advanced calibration provides reliability metrics
+4. **Explanation Generation**: AI services generate human-readable explanations
+5. **Source Verification**: System searches for corroborating or contradicting sources
+6. **Result Compilation**: All components combine into comprehensive analysis
+7. **Visualization**: Results displayed with interactive charts and source links
+
+## 📁 Project Structure
 
 ```
 factify/
