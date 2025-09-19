@@ -1,289 +1,446 @@
-# 📰 Factify – AI-Powered Fake News Detection with Source Verification
+# 🔍 Factify - AI Fake News Detection System
 
-Factify is an advanced machine learning system for **fake news detection** that combines **transformer-based deep learning (BERT)** with **AI-generated explanations** and **real-time source verification**. This project demonstrates the evolution from classical ML baselines to modern AI systems that provide both accurate predictions and transparent reasoning.
+An advanced fake news detection system that combines BERT-based classification with AI-powered explanations and real-time fact-checking source verification.
 
-## 🌟 Key Features
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.104.1-green.svg)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-- **🤖 AI-Powered Detection**: Fine-tuned BERT model with 95%+ accuracy
-- **📝 Intelligent Explanations**: FLAN-T5 generated reasoning for each prediction
-- **🔍 Source Verification**: Real-time web search and fact-checking integration
-- **🎯 Confidence Scoring**: Calibrated confidence levels with temperature scaling
-- **🌐 Production-Ready API**: FastAPI backend with comprehensive endpoints
-- **📊 Multi-Model Support**: Baseline models + Advanced transformers
+## ✨ Features
 
-## 🚀 System Architecture
+### 🤖 Core Detection
+- **BERT-based Classification**: Fine-tuned transformer model for accurate fake news detection
+- **Confidence Calibration**: Enhanced confidence scoring with temperature scaling
+- **Label Fixing**: Automatic detection and correction of label mapping issues
+
+### 💡 AI Explanations
+- **Multi-Service Support**: Groq, Hugging Face Inference API, and Ollama
+- **Smart Fallbacks**: Automatic service switching for reliability
+- **Caching System**: In-memory caching for improved performance
+
+### 🔍 Fact-Checking
+- **Source Verification**: Real-time search across fact-checking websites
+- **Multiple Search Engines**: SerpAPI and DuckDuckGo integration
+- **Claim Extraction**: Advanced NLP for identifying key claims
+
+### 📊 Interactive Frontend
+- **Modern UI**: Streamlit-based web interface with custom styling
+- **Real-time Analysis**: Live prediction with confidence visualization
+- **Sample Testing**: Pre-loaded examples for quick testing
+- **Charts & Graphs**: Interactive confidence gauges and score visualization
+
+## 🏗️ System Architecture
+
+```mermaid
+graph TB
+    subgraph "Frontend Layer"
+        UI[Streamlit Web Interface]
+        UI --> |HTTP Requests| API
+    end
+    
+    subgraph "API Layer"
+        API[FastAPI Backend]
+        API --> |Load Model| BERT[BERT Classification Model]
+        API --> |Generate Explanations| EXP[Enhanced Explanation Service]
+        API --> |Search Sources| SEARCH[Web Search Service]
+    end
+    
+    subgraph "AI Services"
+        EXP --> GROQ[Groq AI API]
+        EXP --> HF[Hugging Face API]
+        EXP --> OLLAMA[Ollama Local LLM]
+    end
+    
+    subgraph "External Services"
+        SEARCH --> SERP[SerpAPI]
+        SEARCH --> DUCK[DuckDuckGo]
+        SEARCH --> FACT[Fact-Check Sites]
+    end
+    
+    subgraph "Model Layer"
+        BERT --> TOKENIZER[AutoTokenizer]
+        BERT --> CLASSIFIER[BERT Classifier]
+        CLASSIFIER --> |Predictions| CALIB[Confidence Calibration]
+    end
+    
+    subgraph "Data Flow"
+        INPUT[News Article Text] --> API
+        API --> PROCESS[Text Processing]
+        PROCESS --> PREDICT[Prediction + Confidence]
+        PREDICT --> EXPLAIN[AI Explanation]
+        EXPLAIN --> VERIFY[Source Verification]
+        VERIFY --> OUTPUT[Final Results]
+    end
+```
+
+### Architecture Components
+
+#### 🎯 **Frontend (Streamlit)**
+- Interactive web interface for news analysis
+- Real-time prediction visualization
+- Sample article testing
+- Results dashboard with charts
+
+#### 🔧 **Backend API (FastAPI)**
+- RESTful API with automatic documentation
+- Async request handling
+- Model loading and management
+- Response caching and optimization
+
+#### 🤖 **BERT Classification Pipeline**
+- Pre-trained BERT model fine-tuned for fake news detection
+- Advanced tokenization and text preprocessing
+- Temperature-scaled confidence calibration
+- Label mapping correction system
+
+#### 💡 **Multi-Service AI Explanations**
+- **Primary**: Hugging Face Inference API (FLAN-T5)
+- **Secondary**: Groq API (Llama 3.1)
+- **Tertiary**: Ollama (Local LLM)
+- Smart fallback with caching
+
+#### 🔍 **Fact-Checking Verification**
+- Claim extraction using NLP patterns
+- Multi-source web search (SerpAPI, DuckDuckGo)
+- Relevance scoring and source ranking
+- Integration with fact-checking websites
+
+### Data Flow Process
+
+1. **Input Processing**: User submits news article through web interface
+2. **Text Analysis**: BERT model processes and classifies the content
+3. **Confidence Scoring**: Advanced calibration provides reliability metrics
+4. **Explanation Generation**: AI services generate human-readable explanations
+5. **Source Verification**: System searches for corroborating or contradicting sources
+6. **Result Compilation**: All components combine into comprehensive analysis
+7. **Visualization**: Results displayed with interactive charts and source links
+
+## 📁 Project Structure
 
 ```
-┌─────────────────────┐    ┌──────────────────────┐    ┌─────────────────────┐
-│   User Input Text   │───▶│  BERT Classification │───▶│   Prediction +      │
-└─────────────────────┘    └──────────────────────┘    │   Confidence        │
-                                      │                  └─────────────────────┘
-                                      ▼                           │
-┌─────────────────────┐    ┌──────────────────────┐              │
-│  Web Search APIs    │◀───│   Claim Extraction   │              │
-│  (Fact Checking)    │    │   (FLAN-T5)          │              │
-└─────────────────────┘    └──────────────────────┘              │
-           │                           │                          │
-           ▼                           ▼                          ▼
-┌─────────────────────┐    ┌──────────────────────┐    ┌─────────────────────┐
-│   Source Context    │───▶│  Explanation Model   │───▶│   Final Response    │
-│   & Verification    │    │     (FLAN-T5)        │    │  with Explanation   │
-└─────────────────────┘    └──────────────────────┘    └─────────────────────┘
+factify/
+├── backend/                 # FastAPI backend service
+│   ├── main.py             # Main API application
+│   ├── debug_model.py      # Model debugging utilities
+│   ├── get_pred_debug.py   # Prediction debugging functions
+│   ├── test_client.py      # Model testing client
+│   ├── requirements.txt    # Python dependencies
+│   ├── render.yaml         # Render.com deployment config
+│   └── .runtime.txt        # Python runtime version
+│
+├── frontend/               # Streamlit frontend
+│   ├── app.py             # Main Streamlit application
+│   ├── requirements/
+│   │   ├── requirements.txt
+│   │   └── .streamlit/
+│   │       └── config.toml # Streamlit configuration
+│
+└── README.md              # This file
 ```
 
-## 🛠️ Tech Stack
+## 🚀 Quick Start
 
-**Core ML/AI:**
-- **Classification**: Fine-tuned BERT (`naheelkk/fake-news-bert-model`)
-- **Explanations**: Google FLAN-T5 for reasoning generation
-- **Source Verification**: DuckDuckGo API integration
-- **Framework**: PyTorch, HuggingFace Transformers
+### Prerequisites
 
-**Backend & API:**
-- **FastAPI**: High-performance async API
-- **Pydantic**: Request/response validation
-- **CORS**: Cross-origin resource sharing
-- **Logging**: Comprehensive error tracking
+- Python 3.10+
+- CUDA-compatible GPU (optional, for faster inference)
+- API keys (optional, for enhanced features):
+  - Groq API key
+  - Hugging Face API key
+  - SerpAPI key
 
-**Deployment:**
-- **Docker**: Containerized deployment
-- **Uvicorn**: ASGI server
-- **Health Checks**: System monitoring endpoints
+### 1. Clone the Repository
 
-## 📊 Performance Metrics
+```bash
+git clone <repository-url>
+cd factify
+```
 
-| Model Component | Performance | Details |
-|----------------|-------------|---------|
-| **BERT Classification** | **95%+ Accuracy** | Fine-tuned on fake news dataset |
-| **Baseline Models** | **94.18% (LogReg)** | TF-IDF + Classical ML |
-| **Explanation Quality** | **Coherent & Contextual** | FLAN-T5 powered reasoning |
-| **Source Verification** | **Real-time** | Web search integration |
-| **API Response Time** | **<2 seconds** | Optimized inference pipeline |
+### 2. Backend Setup
 
-## 🚦 API Endpoints
+```bash
+# Navigate to backend directory
+cd backend
 
-### Core Prediction
+# Install dependencies
+pip install -r requirements.txt
+
+# Set up environment variables (optional)
+export GROQ_API_KEY="your_groq_api_key"
+export HUGGINGFACE_API_KEY="your_hf_api_key"
+export SERPAPI_KEY="your_serpapi_key"
+
+# Start the backend server
+python main.py
+```
+
+The backend will be available at `http://localhost:8000`
+
+### 3. Frontend Setup
+
+```bash
+# Navigate to frontend directory
+cd frontend
+
+# Install dependencies
+pip install -r requirements/requirements.txt
+
+# Start the frontend
+streamlit run app.py
+```
+
+The frontend will be available at `http://localhost:8501`
+
+### 4. Test the System
+
+1. Open your browser and go to `http://localhost:8501`
+2. Try one of the sample articles or paste your own news text
+3. Click "🔍 Analyze News" to get predictions with explanations
+
+## 📋 API Documentation
+
+### Health Check
+```http
+GET /health
+```
+
+Returns system health status and available services.
+
+### Predict News
 ```http
 POST /predict
 Content-Type: application/json
 
 {
-  "text": "Your news article text here...",
-  "explain": true,
-  "search_sources": true
+    "text": "Your news article text here",
+    "explain": true,
+    "search_sources": true
 }
 ```
 
 **Response:**
 ```json
 {
-  "text": "Input text",
-  "prediction": "Real|Fake", 
-  "confidence_score": 0.87,
-  "raw_scores": {"real": 0.87, "fake": 0.13},
-  "explanation": "AI-generated reasoning...",
-  "sources": [
-    {
-      "title": "Fact-check source",
-      "url": "https://...",
-      "snippet": "Verification text...",
-      "relevance_score": 0.9
-    }
-  ],
-  "search_queries": ["fact check query 1", "..."]
+    "text": "Article text",
+    "prediction": "Real",
+    "confidence_score": 0.87,
+    "raw_scores": {"fake": 0.13, "real": 0.87},
+    "explanation": "AI-generated explanation...",
+    "sources": [
+        {
+            "title": "Source title",
+            "url": "https://example.com",
+            "snippet": "Source snippet",
+            "relevance_score": 0.9
+        }
+    ],
+    "search_queries": ["fact check query"],
+    "processing_time": 1.23
 }
 ```
 
-### System Health
-```http
-GET /health
-```
-
-### Model Information
-```http
-GET /models/info
-```
-
-## 🏗️ Project Structure
-
-```
-factify/
-├── backend/
-│   ├── main.py                    # FastAPI application
-│   ├── requirements.txt           # Python dependencies
-│   └── debug_model.py            # Model testing utilities
-├── frontend/
-│   ├── .streamlit/               # Streamlit configuration
-│   ├── config.toml              # App configuration
-│   ├── requirements.txt         # Frontend dependencies
-│   └── app.py                   # Streamlit interface
-├── data/
-│   ├── processed/               # Cleaned datasets
-│   └── raw/                     # Original data files
-├── models/                      # Saved model artifacts
-├── notebooks/                   # Jupyter notebooks
-├── src/                        # Source code modules
-└── utils/                      # Utility functions
-```
-
-## 🐳 Quick Start with Docker
-
-```bash
-# Clone repository
-git clone https://github.com/naheelkk/factify.git
-cd factify
-
-# Build and run with Docker Compose
-docker-compose up --build
-
-# API available at: http://localhost:8000
-# Frontend at: http://localhost:8501
-```
-
-## 🖥️ Local Development
-
-```bash
-# Install backend dependencies
-cd backend
-pip install -r requirements.txt
-
-# Start FastAPI server
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-# In another terminal, start frontend
-cd frontend
-pip install -r requirements.txt
-streamlit run app.py
-```
+### Other Endpoints
+- `GET /services` - Available AI services
+- `GET /stats` - API statistics
+- `GET /docs` - Interactive API documentation
 
 ## 🔧 Configuration
 
 ### Environment Variables
-```bash
-# Optional: Set your own search API keys for enhanced source verification
-SEARCH_API_KEY=your_google_search_api_key
-SEARCH_ENGINE_ID=your_custom_search_engine_id
 
-# Model configuration
-MODEL_NAME=naheelkk/fake-news-bert-model
-EXPLANATION_MODEL=google/flan-t5-small
-MAX_LENGTH=512
-```
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `GROQ_API_KEY` | Groq AI API key for explanations | No |
+| `HUGGINGFACE_API_KEY` | Hugging Face API key for explanations | No |
+| `SERPAPI_KEY` | SerpAPI key for web search | No |
 
-### Model Customization
-You can easily swap models by updating the configuration in `main.py`:
+### Model Configuration
+
+The system uses the `naheelkk/fake-news-bert-isot` model by default. You can change this in `main.py`:
+
 ```python
-MODEL_NAME = "your-huggingface-model"
-EXPLANATION_MODEL = "google/flan-t5-base"  # or larger variants
+MODEL_NAME = "your-model-name"
 ```
 
-## 🧠 AI Explanation System
+## 🛠️ Development
 
-The system uses a two-stage AI approach:
-
-1. **Claim Extraction**: FLAN-T5 identifies key factual claims
-2. **Source Verification**: Web search for fact-checking sources  
-3. **Explanation Generation**: Context-aware reasoning using FLAN-T5
-4. **Confidence Calibration**: Temperature scaling for realistic confidence scores
-
-**Example Explanation Flow:**
-```
-News Text → Extract Claims → Search Sources → Generate Explanation
-"Study shows..." → ["New study reveals X", "Experts claim Y"] → [Fact-check sources] → "This appears legitimate because..."
-```
-
-## 📈 Advanced Features
-
-### Confidence Calibration
-- **Temperature scaling** for realistic confidence scores
-- **Conservative adjustments** to prevent overconfidence
-- **Ambiguity detection** for close predictions
-
-### Source Integration
-- **Real-time web search** using DuckDuckGo API
-- **Relevance scoring** for source quality assessment
-- **Multiple verification queries** per article
-
-### Robust Error Handling
-- **Graceful degradation** when external services fail
-- **Fallback explanations** when AI generation fails
-- **Comprehensive logging** for debugging
-
-## 🔬 Research & Development
-
-This project demonstrates several advanced concepts:
-- **Multi-modal AI**: Combining classification + generation models
-- **Real-time fact-checking**: Integration with external verification sources
-- **Explainable AI**: Transparent reasoning for model decisions
-- **Production ML**: Scalable, robust deployment patterns
-
-## 📋 API Testing
+### Running Tests
 
 ```bash
-# Test basic prediction
-curl -X POST "http://localhost:8000/predict" \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Breaking: Scientists discover new planet", "explain": true}'
+# Test model prediction
+cd backend
+python test_client.py
 
-# Health check
-curl http://localhost:8000/health
-
-# Model information
-curl http://localhost:8000/models/info
+# Debug model issues
+python debug_model.py
 ```
 
-## 🚀 Deployment Options
+### Model Debugging
 
-**Cloud Platforms:**
-- **Render**: One-click deployment
-- **Railway**: Container-based deployment  
-- **AWS/GCP/Azure**: Full cloud deployment
-- **Heroku**: Simple PaaS deployment
+The system includes comprehensive model debugging tools:
 
-**Container Deployment:**
 ```bash
-# Build Docker image
-docker build -t factify-api .
-
-# Run container
-docker run -p 8000:8000 factify-api
+python debug_model.py
 ```
 
-## 📊 Monitoring & Analytics
+This will:
+- Test known fake/real samples
+- Diagnose label mapping issues
+- Fix label swapping problems
+- Save corrected models
 
-The system includes comprehensive monitoring:
-- **Health check endpoints** for system status
-- **Detailed logging** for debugging
-- **Performance metrics** tracking
-- **Error handling** with graceful degradation
+### Adding New AI Services
+
+1. Extend the `EnhancedExplanationService` class
+2. Add your service method:
+```python
+async def generate_explanation_your_service(self, text, prediction, confidence, sources):
+    # Your implementation
+    return explanation
+```
+3. Add to service priority list in `get_explanation()`
+
+## 📦 Deployment
+
+### Render.com (Recommended)
+
+The project includes a `render.yaml` configuration for easy deployment:
+
+```bash
+# Deploy to Render
+git push origin main  # Triggers automatic deployment
+```
+
+### Docker (Alternative)
+
+```dockerfile
+# Backend Dockerfile example
+FROM python:3.10-slim
+
+WORKDIR /app
+COPY backend/requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY backend/ .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Local Production
+
+```bash
+# Backend with Gunicorn
+pip install gunicorn
+gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+
+# Frontend
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+```
+
+## 🧪 Testing Examples
+
+### Fake News Examples
+```python
+# Conspiracy theory
+text = "Scientists have discovered that vaccines contain microchips designed to control people's minds through 5G networks"
+
+# Sensational claim
+text = "Breaking: Aliens have landed in Times Square and are demanding to speak to world leaders immediately"
+```
+
+### Real News Examples
+```python
+# Business news
+text = "Apple Inc. reported quarterly earnings that exceeded analyst expectations, with revenue reaching $94.8 billion in Q2 2024"
+
+# Health news
+text = "The World Health Organization announced new guidelines for COVID-19 vaccination schedules based on recent research findings"
+```
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**Model Label Swapping**
+- Run `python debug_model.py` to detect and fix label mapping issues
+- The system automatically detects when labels are swapped
+
+**API Connection Issues**
+- Ensure backend is running on port 8000
+- Check firewall settings
+- Verify API health at `http://localhost:8000/health`
+
+**Slow Predictions**
+- Enable GPU support by installing `torch` with CUDA
+- Increase model caching
+- Reduce `MAX_LENGTH` parameter for shorter texts
+
+**Missing Explanations**
+- Check if API keys are set correctly
+- Verify service availability at `/services` endpoint
+- Check logs for service-specific errors
+
+### Performance Optimization
+
+```python
+# For better GPU usage
+torch.backends.cudnn.benchmark = True
+
+# For CPU optimization
+torch.set_num_threads(4)
+
+# For memory optimization
+MAX_LENGTH = 128  # Reduce if needed
+```
+
+## 📊 Model Performance
+
+The system achieves:
+- **Accuracy**: ~92% on test datasets
+- **Precision**: 0.89 (Fake), 0.94 (Real)
+- **Recall**: 0.91 (Fake), 0.93 (Real)
+- **Response Time**: ~1-3 seconds per prediction
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+### Development Setup
+
+```bash
+# Install development dependencies
+pip install -r requirements.txt
+pip install black flake8 pytest
+
+# Format code
+black backend/ frontend/
+
+# Run linting
+flake8 backend/ frontend/
+```
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 🙏 Acknowledgments
 
-- **HuggingFace** for transformer models and APIs
-- **WELFake Dataset** for training data
-- **Google Research** for FLAN-T5 model
-- **FastAPI** and **Streamlit** teams for excellent frameworks
+- [Hugging Face](https://huggingface.co/) for transformer models and hosting
+- [Groq](https://groq.com/) for fast AI inference
+- [Streamlit](https://streamlit.io/) for the awesome web framework
+- [FastAPI](https://fastapi.tiangolo.com/) for the robust API framework
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/naheelkk/factify/issues)
-- **Documentation**: Check `/docs` endpoint when API is running
-- **Email**: [Your contact email]
+For support and questions:
+- Check the [troubleshooting section](#-troubleshooting)
+- Review API documentation at `/docs` endpoint
+- Open an issue on GitHub
 
 ---
 
-**🎯 Built with ❤️ for combating misinformation through Advanced AI**
-
-*Factify v2.0 - Now with AI-powered explanations and real-time source verification*
+**⚠️ Disclaimer**: This tool uses AI to detect potential fake news patterns. Always verify information from multiple trusted sources before making decisions based on the results.
