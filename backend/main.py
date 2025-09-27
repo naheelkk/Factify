@@ -129,6 +129,8 @@ Provide a clear, professional explanation in 2-3 sentences focusing on:
 - Factual verification status
 
 Explanation:"""
+
+            print(prompt)
             
             chat_completion = self.groq_client.chat.completions.create(
                 messages=[
