@@ -157,10 +157,10 @@ def check_api_health():
     except requests.exceptions.RequestException:
         return False, None
 
-def predict_news(text, explain=True, search_sources=True):
+def predict_news(text, explain=True):
     """Make prediction request to the API"""
     try:
-        payload = {"text": text, "explain": explain, "search_sources": search_sources}
+        payload = {"text": text, "explain": explain}
         response = requests.post(f"{API_BASE_URL}/predict", json=payload, timeout=45)
         
         if response.status_code == 200:
@@ -234,12 +234,10 @@ def main():
         )
         
         # Options
-        col_opt1, col_opt2, col_opt3 = st.columns([1, 1, 1])
+        col_opt1, col_opt2 = st.columns([1, 1])
         with col_opt1:
             include_explanation = st.checkbox("Include AI Explanation", value=True)
         with col_opt2:
-            search_sources = st.checkbox("Search for Sources", value=True)
-        with col_opt3:
             show_charts = st.checkbox("Show Charts", value=True)
         
         # Analyze button
@@ -262,16 +260,14 @@ def main():
         results_container = st.container()
         
         if analyze_button and news_text.strip():
-            with st.spinner("🤖 Analyzing article and searching for sources..."):
-                success, result = predict_news(news_text, include_explanation, search_sources)
+            with st.spinner("🤖 Analyzing article..."):
+                success, result = predict_news(news_text, include_explanation)
                 
                 if success:
                     prediction = result["prediction"]
                     confidence = result["confidence_score"]
                     raw_scores = result["raw_scores"]
                     explanation = result.get("explanation")
-                    sources = result.get("sources", [])
-                    search_queries = result.get("search_queries", [])
                     
                     # Prediction card
                     card_class = "fake-news" if prediction == "Fake" else "real-news"
@@ -281,7 +277,6 @@ def main():
                     <div class="prediction-card {card_class}">
                         <h3>📊 Prediction: {prediction} News</h3>
                         <p class="{confidence_class}">Confidence: {confidence:.1%}</p>
-                        {f"<p><small>🔍 Searched {len(search_queries)} queries, found {len(sources)} sources</small></p>" if search_sources else ""}
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -295,26 +290,10 @@ def main():
                         fig_scores = create_scores_chart(raw_scores)
                         st.plotly_chart(fig_scores, use_container_width=True)
                     
-                    # Sources section
-                    if search_sources and sources:
-                        st.subheader("🔍 Sources & Evidence")
-                        for i, source in enumerate(sources, 1):
-                            relevance_color = "🟢" if source["relevance_score"] > 0.8 else "🟡" if source["relevance_score"] > 0.5 else "🔴"
-                            with st.expander(f"{relevance_color} Source {i}: {source['title'][:60]}..."):
-                                st.write(f"**Relevance:** {source['relevance_score']:.1%}")
-                                st.write(f"**Snippet:** {source['snippet']}")
-                                st.write(f"**URL:** [{source['url']}]({source['url']})")
-                    
                     # Explanation
                     if include_explanation and explanation:
                         st.subheader("🧠 AI Analysis")
                         st.info(explanation)
-                    
-                    # Search queries used (collapsible)
-                    if search_sources and search_queries:
-                        with st.expander("🔎 Search Queries Used"):
-                            for i, query in enumerate(search_queries, 1):
-                                st.write(f"{i}. `{query}`")
                     
                     # Raw scores
                     with st.expander("🔢 Raw Scores"):

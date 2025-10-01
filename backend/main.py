@@ -124,10 +124,8 @@ Classification: {prediction} (confidence: {confidence:.1%})
 {source_context}
 
 Provide a clear, professional explanation in 2-3 sentences focusing on:
-- Content credibility indicators
-- Language analysis patterns
-- Factual verification status
-
+1. If the classification done by the model is correct or not
+2. Tell the user why the news is fake or real based on your research.
 Explanation:"""
 
             print(prompt)
