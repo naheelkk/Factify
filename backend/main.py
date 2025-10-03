@@ -3,18 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from typing import Optional, List
+from typing import Optional
 import logging
 import numpy as np
-import requests
 import re
-from urllib.parse import quote
-import asyncio
 from datetime import datetime
 from contextlib import asynccontextmanager
 import os
 from groq import Groq
-import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,21 +19,12 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Request/Response models with updated Pydantic v2 syntax
+# Request/Response models
 class NewsRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     
     text: str
     explain: bool = True
-    search_sources: bool = True
-
-class SourceInfo(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    
-    title: str
-    url: str
-    snippet: str
-    relevance_score: float
 
 class PredictionResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
@@ -47,8 +34,6 @@ class PredictionResponse(BaseModel):
     confidence_score: float
     raw_scores: dict
     explanation: Optional[str] = None
-    sources: Optional[List[SourceInfo]] = None
-    search_queries: Optional[List[str]] = None
     processing_time: Optional[float] = None
 
 class HealthResponse(BaseModel):
@@ -57,8 +42,6 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     explanation_service_available: bool
-    search_enabled: bool
-    available_services: List[str]
 
 # Global variables for model components
 class ModelComponents:
@@ -66,457 +49,183 @@ class ModelComponents:
         self.model = None
         self.tokenizer = None
         self.device = None
-        self.explanation_service = None
+        self.groq_client = None
 
 model_components = ModelComponents()
 
-# Configuration - API keys from environment
+# Configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")  # For better web search
-
-# Model configuration
 MODEL_NAME = "naheelkk/fake-news-bert-isot"
-MAX_LENGTH = 256
+MAX_LENGTH = 512
 
-class EnhancedExplanationService:
-    """Enhanced explanation service with better error handling and caching"""
+class GroqExplanationService:
+    """Groq-based explanation service with enhanced prompting and caching"""
     
-    def __init__(self):
-        self.services = []
-        self.initialize_services()
-        self.explanation_cache = {}  # Simple in-memory cache
-    
-    def initialize_services(self):
-        """Initialize available explanation services"""
-        if GROQ_API_KEY:
-            self.services.append("groq")
-            self.groq_client = Groq(api_key=GROQ_API_KEY)
-            logger.info("✅ Groq service initialized")
-            
-        if HUGGINGFACE_API_KEY:
-            self.services.append("huggingface")
-            logger.info("✅ HuggingFace service initialized")
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ValueError("GROQ_API_KEY is required")
         
-        # Always check for local Ollama
-        self.services.append("ollama")
-        logger.info(f"📋 Available services: {self.services}")
+        self.groq_client = Groq(api_key=api_key)
+        self.explanation_cache = {}
+        logger.info("✅ Groq explanation service initialized")
     
     def get_cache_key(self, text: str, prediction: str, confidence: float) -> str:
         """Generate cache key for explanation"""
-        return f"{hash(text[:100])}_{prediction}_{int(confidence*100)}"
+        text_hash = hash(text[:200])
+        return f"{text_hash}_{prediction}_{int(confidence*100)}"
     
-    async def generate_explanation_groq(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
-        """Enhanced Groq explanation with better prompting"""
+    def analyze_text_features(self, text: str) -> dict:
+        """Analyze text characteristics for better explanations"""
+        features = {
+            'word_count': len(text.split()),
+            'has_quotes': '"' in text or "'" in text,
+            'has_numbers': bool(re.search(r'\d+', text)),
+            'excessive_caps': len(re.findall(r'\b[A-Z]{3,}\b', text)),
+            'exclamation_count': text.count('!'),
+            'question_count': text.count('?'),
+            'has_sources': bool(re.search(r'(according to|source|study|research|report)', text, re.IGNORECASE)),
+            'sensational_words': len(re.findall(r'\b(shocking|breaking|unbelievable|secret|bombshell|exposed)\b', text, re.IGNORECASE))
+        }
+        return features
+    
+    async def generate_explanation(self, text: str, prediction: str, confidence: float) -> str:
+        """Generate enhanced explanation using Groq"""
         try:
-            source_context = ""
-            if sources and len(sources) > 0:
-                source_context = f"\n\nVerification context: Found {len(sources)} related sources"
-                for i, source in enumerate(sources[:2], 1):
-                    title = source.get('title', 'Source')[:60]
-                    snippet = source.get('snippet', '')[:100]
-                    source_context += f"\n{i}. {title}: {snippet}"
+            # Check cache first
+            cache_key = self.get_cache_key(text, prediction, confidence)
+            if cache_key in self.explanation_cache:
+                logger.info("📋 Using cached explanation")
+                return self.explanation_cache[cache_key]
             
-            prompt = f"""As a fact-checking expert, analyze why this news article is classified as {prediction.upper()}.
-
-Article excerpt: {text[:300]}{'...' if len(text) > 300 else ''}
-Classification: {prediction} (confidence: {confidence:.1%})
-{source_context}
-
-Provide a clear, professional explanation in 2-3 sentences focusing on:
-1. If the classification done by the model is correct or not
-2. Tell the user why the news is fake or real based on your research.
-Explanation:"""
-
-            print(prompt)
+            # Analyze text features
+            features = self.analyze_text_features(text)
             
+            # Build context for better explanations
+            feature_context = []
+            if features['excessive_caps'] > 3:
+                feature_context.append("excessive capitalization")
+            if features['exclamation_count'] > 3:
+                feature_context.append("multiple exclamation marks")
+            if features['sensational_words'] > 2:
+                feature_context.append("sensational language")
+            if features['has_sources']:
+                feature_context.append("source attribution present")
+            
+            feature_text = f"\n\nText characteristics: {', '.join(feature_context)}" if feature_context else ""
+            
+            # Enhanced prompt for better explanations
+            prompt = f"""You are an expert fact-checker analyzing news content credibility.
+
+Article excerpt: "{text[:400]}{'...' if len(text) > 400 else ''}"
+
+Classification: {prediction.upper()} (confidence: {confidence:.1%}){feature_text}
+
+Provide a clear, professional explanation in 2-3 sentences that:
+1. States whether the classification appears correct based on the content
+2. Identifies specific indicators that support this classification (language patterns, source credibility, fact consistency)
+3. Gives practical advice on verification
+
+Focus on concrete evidence, not speculation. Be direct and informative."""
+
+            # Call Groq API with optimized settings
             chat_completion = self.groq_client.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": "You are an expert fact-checker providing concise, accurate analyses of news content credibility."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system", 
+                        "content": "You are a professional fact-checking expert who provides clear, evidence-based analyses of news content. You focus on specific indicators like language patterns, source credibility, and factual consistency."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
                 ],
-                model="llama-3.1-8b-instant",
-                max_tokens=120,
-                temperature=0.2,
+                model="llama-3.1-8b-instant",  # Better model for more nuanced analysis
+                max_tokens=150,
+                temperature=0.3,  # Lower temperature for more consistent output
                 top_p=0.9
             )
             
             explanation = chat_completion.choices[0].message.content.strip()
-            return explanation if explanation else None
             
-        except Exception as e:
-            logger.error(f"Groq API error: {str(e)}")
-            return None
-    
-    async def generate_explanation_huggingface(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
-        """Generate explanation using Hugging Face's flan-t5-large (instruction-tuned model)"""
-        try:
-            API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
-            headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-
-            source_context = ""
-            if sources and len(sources) > 0:
-                source_context = f" Based on {len(sources)} external verification sources."
-
-            # 💡 Optimized for FLAN-T5: instruction-style, clear task definition
-            prompt = f"""As a fact-checking expert, explain in 2-3 sentences why the following news excerpt is classified as '{prediction}' with {confidence:.1%} confidence.{source_context}
-
-Excerpt: "{text[:200]}..."
-
-Focus on:
-- Language patterns and tone
-- Source credibility indicators
-- Consistency with known facts
-
-Explanation:"""
-
-            payload = {
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 120,
-                    "temperature": 0.3,
-                    "do_sample": False,           # Deterministic for consistent quality
-                    "return_full_text": False     # Only return generated text
-                },
-                "options": {
-                    "wait_for_model": True,
-                    "use_cache": False
-                }
-            }
-
-            logger.info("📡 Calling Hugging Face API with optimized prompt...")
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=45)  # Allow cold start
-
-            if response.status_code == 200:
-                result = response.json()
-                # Uncomment below for detailed debugging
-                # logger.debug(f"📡 Hugging Face raw response: {result}")
-
-                # Handle different possible response formats
-                if isinstance(result, list) and len(result) > 0:
-                    explanation = result[0].get('generated_text', '').strip()
-                elif isinstance(result, dict) and 'generated_text' in result:
-                    explanation = result['generated_text'].strip()
-                else:
-                    explanation = ""
-
-                # Validate useful output
-                if explanation and len(explanation.strip()) > 10:
-                    logger.info("✅ Hugging Face successfully generated explanation.")
-                    return explanation
-                else:
-                    logger.warning("⚠️ Hugging Face returned empty/short/unusable explanation.")
-                    return None
-
+            if explanation and len(explanation) > 20:
+                # Cache successful explanation
+                self.explanation_cache[cache_key] = explanation
+                logger.info("✅ Generated explanation using Groq")
+                return explanation
             else:
-                logger.error(f"❌ Hugging Face API error {response.status_code}: {response.text}")
-                return None
-
-        except Exception as e:
-            logger.error(f"❌ Hugging Face generation failed: {str(e)}")
-            return None
-    
-    async def check_ollama_availability(self) -> bool:
-        """Check if Ollama is available with better timeout handling"""
-        try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=15)
-            return response.status_code == 200
-        except:
-            return False
-    
-    async def generate_explanation_ollama(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
-        """Enhanced Ollama explanation with availability check"""
-        try:
-            if not await self.check_ollama_availability():
-                return None
-            
-            source_context = f" Based on {len(sources)} verification sources," if sources else ""
-            
-            prompt = f"""Explain why this news is {prediction.lower()}:{source_context}
-
-Text: {text[:250]}...
-Confidence: {confidence:.1%}
-
-Provide a brief, factual explanation (2 sentences max):"""
-            
-            payload = {
-                "model": "gemma3:latest",  # Popular model
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.2,
-                    "num_predict": 80,
-                    "top_p": 0.9
-                }
-            }
-            
-            response = requests.post("http://localhost:11434/api/generate", json=payload, timeout=12)
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('response', '').strip()
-                
-            return None
+                logger.warning("⚠️ Groq returned empty/short explanation, using fallback")
+                return self._get_fallback_explanation(text, prediction, confidence, features)
             
         except Exception as e:
-            logger.debug(f"Ollama error: {str(e)}")
-            return None
+            logger.error(f"❌ Groq API error: {str(e)}")
+            return self._get_fallback_explanation(text, prediction, confidence, features)
     
-    async def get_explanation(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
-        """Get explanation with caching and improved fallback"""
-        
-        # Check cache first
-        cache_key = self.get_cache_key(text, prediction, confidence)
-        if cache_key in self.explanation_cache:
-            logger.info("📋 Using cached explanation")
-            return self.explanation_cache[cache_key]
-        
-        # Service priority: Hugging Face → Groq → Ollama
-        service_methods = [
-            ("huggingface", self.generate_explanation_huggingface),
-            ("groq", self.generate_explanation_groq),
-            ("ollama", self.generate_explanation_ollama)
-        ]
-        
-        for service_name, method in service_methods:
-            if service_name in self.services:
-                try:
-                    logger.info(f"🔄 Trying {service_name} for explanation")
-                    explanation = await method(text, prediction, confidence, sources)
-                    if explanation and len(explanation.strip()) > 10:
-                        # Cache successful explanation
-                        self.explanation_cache[cache_key] = explanation
-                        logger.info(f"✅ Generated explanation using {service_name}")
-                        return explanation
-                except Exception as e:
-                    logger.warning(f"❌ {service_name} failed: {str(e)}")
-                    continue
-        
-        # Enhanced fallback explanation
-        logger.info("📝 All AI services failed or skipped. Using template explanation.")
-        explanation = self.get_enhanced_template_explanation(text, prediction, confidence, sources)
-        self.explanation_cache[cache_key] = explanation
-        return explanation
-    
-    def get_enhanced_template_explanation(self, text: str, prediction: str, confidence: float, sources: List[dict] = None) -> str:
-        """Enhanced template-based explanation with better analysis"""
-        
-        # Analyze text characteristics
-        word_count = len(text.split())
-        has_quotes = '"' in text or "'" in text
-        has_numbers = bool(re.search(r'\d+', text))
-        has_caps = bool(re.search(r'[A-Z]{3,}', text))
+    def _get_fallback_explanation(self, text: str, prediction: str, confidence: float, features: dict) -> str:
+        """Enhanced fallback explanation with feature analysis"""
         
         if prediction.lower() == "fake":
-            reasons = []
-            if has_caps:
-                reasons.append("excessive capitalization")
-            if confidence > 0.8:
-                reasons.append("strong linguistic patterns associated with misinformation")
-            else:
-                reasons.append("several suspicious content indicators")
-            
-            explanation = f"This content exhibits {' and '.join(reasons)}. "
-            
-            if sources and len(sources) > 0:
-                explanation += f"Cross-verification with {len(sources)} sources reveals inconsistencies with established facts."
-            else:
-                explanation += "The claims lack proper source attribution and verification."
-                
-        else:  # Real news
             indicators = []
-            if has_quotes:
-                indicators.append("proper attribution")
-            if has_numbers:
-                indicators.append("specific factual details")
-            if word_count > 100:
-                indicators.append("comprehensive reporting style")
+            
+            if features['excessive_caps'] > 3:
+                indicators.append("excessive capitalization suggesting sensationalism")
+            if features['exclamation_count'] > 3:
+                indicators.append("overuse of exclamation marks")
+            if features['sensational_words'] > 2:
+                indicators.append("sensational language patterns")
+            if not features['has_sources']:
+                indicators.append("lack of credible source attribution")
             
             if indicators:
-                explanation = f"This article demonstrates {', '.join(indicators)} typical of legitimate journalism. "
+                explanation = f"This content exhibits {', '.join(indicators[:2])}, which are common in misinformation. "
             else:
-                explanation = "This content follows standard journalistic patterns and structure. "
+                explanation = "This content shows linguistic patterns commonly associated with unreliable information. "
             
-            if sources and len(sources) > 0:
-                explanation += f"Verification across {len(sources)} external sources corroborates the main claims."
+            if confidence > 0.85:
+                explanation += "The model is highly confident in this classification. Always verify such claims with established fact-checking organizations."
             else:
-                explanation += "The reporting style and content structure align with credible news standards."
+                explanation += "Exercise caution and cross-reference with multiple trusted sources before accepting these claims."
+        
+        else:  # Real news
+            positive_indicators = []
+            
+            if features['has_sources']:
+                positive_indicators.append("proper source attribution")
+            if features['has_quotes']:
+                positive_indicators.append("direct quotes")
+            if features['has_numbers'] and features['word_count'] > 100:
+                positive_indicators.append("specific factual details and comprehensive reporting")
+            
+            if positive_indicators:
+                explanation = f"This article demonstrates {' and '.join(positive_indicators[:2])}, typical of credible journalism. "
+            else:
+                explanation = "This content follows standard journalistic patterns and balanced reporting style. "
+            
+            if features['excessive_caps'] == 0 and features['sensational_words'] == 0:
+                explanation += "The measured tone and lack of sensationalism further support its credibility."
+            else:
+                explanation += "However, always verify important claims through multiple reputable sources."
         
         return explanation
 
-class EnhancedWebSearch:
-    """Enhanced web search with multiple fallback options"""
-    
-    def __init__(self):
-        self.serpapi_key = SERPAPI_KEY
-    
-    async def search_with_serpapi(self, query: str, max_results: int = 3) -> List[dict]:
-        """Search using SerpAPI (Google Search) - more reliable"""
-        if not self.serpapi_key:
-            return []
-        
-        try:
-            search_url = "https://serpapi.com/search"
-            params = {
-                "engine": "google",
-                "q": f"{query} site:factcheck.org OR site:snopes.com OR site:politifact.com",
-                "api_key": self.serpapi_key,
-                "num": max_results
-            }
-            
-            response = requests.get(search_url, params=params, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                sources = []
-                
-                for result in data.get('organic_results', [])[:max_results]:
-                    sources.append({
-                        'title': result.get('title', ''),
-                        'url': result.get('link', ''),
-                        'snippet': result.get('snippet', ''),
-                        'relevance_score': 0.9
-                    })
-                
-                return sources
-            
-        except Exception as e:
-            logger.error(f"SerpAPI search error: {str(e)}")
-        
-        return []
-    
-    async def search_with_duckduckgo(self, query: str, max_results: int = 3) -> List[dict]:
-        """Enhanced DuckDuckGo search with better parsing"""
-        try:
-            # Use DuckDuckGo HTML search for better results
-            search_url = f"https://html.duckduckgo.com/html/?q={quote(query + ' fact check')}"
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            response = requests.get(search_url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                # Simple HTML parsing for demo (in production, use BeautifulSoup)
-                content = response.text
-                sources = []
-                
-                # Extract basic info (simplified for demo)
-                sources.append({
-                    'title': f'Fact-check results for: {query[:40]}...',
-                    'url': 'https://duckduckgo.com/search',
-                    'snippet': f'Multiple sources found for verification of: {query}',
-                    'relevance_score': 0.7
-                })
-                
-                return sources[:max_results]
-        
-        except Exception as e:
-            logger.error(f"DuckDuckGo search error: {str(e)}")
-        
-        return []
-    
-    async def search_sources(self, query: str, max_results: int = 3) -> List[dict]:
-        """Search with multiple fallback options"""
-        
-        # Try SerpAPI first (most reliable)
-        sources = await self.search_with_serpapi(query, max_results)
-        if sources:
-            return sources
-        
-        # Fallback to DuckDuckGo
-        sources = await self.search_with_duckduckgo(query, max_results)
-        if sources:
-            return sources
-        
-        # Final fallback - mock results for demo
-        return [{
-            'title': f'Fact-check verification needed: {query[:50]}...',
-            'url': 'https://factcheck.org',
-            'snippet': f'Please verify claims about "{query}" with multiple trusted sources including fact-checking organizations.',
-            'relevance_score': 0.5
-        }]
-
-# Enhanced helper functions
-def extract_enhanced_claims(text: str) -> List[str]:
-    """Enhanced claim extraction with better NLP patterns"""
-    try:
-        sentences = re.split(r'[.!?]+', text)
-        claims = []
-        
-        # Enhanced claim indicators
-        claim_patterns = [
-            r'\b(says?|reports?|according to|claims?|reveals?|shows?|announces?)\b',
-            r'\b(study|research|survey|poll|investigation)\b.*\b(finds?|shows?|reveals?)\b',
-            r'\b(expert|official|spokesperson)\b.*\b(says?|claims?|reports?)\b',
-            r'\b(\d+%|\d+ percent)\b.*\b(increase|decrease|rise|fall)\b'
-        ]
-        
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if len(sentence) > 30:
-                # Check for claim patterns
-                if any(re.search(pattern, sentence, re.IGNORECASE) for pattern in claim_patterns):
-                    claims.append(sentence[:120] + '...' if len(sentence) > 120 else sentence)
-        
-        # If no pattern matches, get key sentences
-        if not claims:
-            key_sentences = [s.strip() for s in sentences if len(s.strip()) > 30][:3]
-            claims.extend(key_sentences)
-        
-        return claims[:3]  # Return top 3 claims
-        
-    except Exception as e:
-        logger.error(f"Error extracting claims: {str(e)}")
-        return [text[:100] + '...' if len(text) > 100 else text]
-
-async def search_fact_check_sources_enhanced(claims: List[str]) -> tuple:
-    """Enhanced fact-checking source search"""
-    web_search = EnhancedWebSearch()
-    all_sources = []
-    search_queries = []
-    
-    for claim in claims:
-        # Create more targeted search queries
-        queries = [
-            f'"{claim[:50]}" fact check',
-            f'{claim[:30]} verification snopes',
-            f'{claim[:30]} politifact reuters'
-        ]
-        
-        for query in queries[:2]:  # Limit queries to avoid rate limits
-            search_queries.append(query)
-            sources = await web_search.search_sources(query, max_results=2)
-            
-            for source in sources:
-                source['query'] = query
-                source['claim'] = claim[:50]
-                all_sources.append(source)
-            
-            await asyncio.sleep(0.2)  # Rate limiting
-    
-    # Remove duplicates and rank by relevance
-    unique_sources = {}
-    for source in all_sources:
-        url_key = source['url']
-        if url_key not in unique_sources or source['relevance_score'] > unique_sources[url_key]['relevance_score']:
-            unique_sources[url_key] = source
-    
-    sorted_sources = sorted(unique_sources.values(), key=lambda x: x['relevance_score'], reverse=True)
-    
-    return sorted_sources[:4], search_queries
-
 def get_enhanced_prediction(text: str):
-    """Enhanced prediction with better confidence calibration"""
+    """Enhanced prediction with improved preprocessing and confidence calibration"""
     try:
         start_time = datetime.now()
         
+        # Enhanced text preprocessing
+        text = text.strip()
+        
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Tokenize with optimized settings
         inputs = model_components.tokenizer(
             text,
             return_tensors="pt",
             max_length=MAX_LENGTH,
             truncation=True,
-            padding=True
+            padding='max_length',
+            return_attention_mask=True
         )
         
         inputs = {k: v.to(model_components.device) for k, v in inputs.items()}
@@ -525,8 +234,8 @@ def get_enhanced_prediction(text: str):
             outputs = model_components.model(**inputs)
             logits = outputs.logits
             
-            # Enhanced confidence calibration
-            temperature = 1.2  # Slightly more conservative
+            # Temperature scaling for better calibration
+            temperature = 1.3
             scaled_logits = logits / temperature
             probabilities = torch.nn.functional.softmax(scaled_logits, dim=-1)
             probabilities = probabilities.cpu().numpy()[0]
@@ -551,7 +260,7 @@ def get_enhanced_prediction(text: str):
         logger.error(f"Error in prediction: {str(e)}")
         raise e
 
-# Lifespan context manager (replaces deprecated on_event)
+# Lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan management"""
@@ -560,6 +269,7 @@ async def lifespan(app: FastAPI):
     try:
         logger.info(f"📥 Loading classification model: {MODEL_NAME}")
         
+        # Set device
         model_components.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"🔧 Using device: {model_components.device}")
         
@@ -571,11 +281,14 @@ async def lifespan(app: FastAPI):
         model_components.model.to(model_components.device)
         model_components.model.eval()
         
-        # Initialize explanation service
-        model_components.explanation_service = EnhancedExplanationService()
+        # Initialize Groq explanation service
+        if GROQ_API_KEY:
+            model_components.groq_client = GroqExplanationService(GROQ_API_KEY)
+            logger.info("✅ Groq explanation service ready!")
+        else:
+            logger.warning("⚠️ GROQ_API_KEY not found - explanations will use fallback templates")
         
         logger.info("✅ Classification model loaded successfully!")
-        logger.info("🤖 API-based explanation service initialized!")
         
     except Exception as e:
         logger.error(f"❌ Error during startup: {str(e)}")
@@ -586,11 +299,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("🔄 Shutting down Factify API...")
 
-# Create FastAPI app with lifespan
+# Create FastAPI app
 app = FastAPI(
-    title="Factify API - Enhanced",
-    description="Advanced fake news detection with multiple AI explanation services",
-    version="3.1.0",
+    title="Factify API",
+    description="AI-powered fake news detection with Groq explanations",
+    version="4.0.0",
     lifespan=lifespan
 )
 
@@ -605,23 +318,20 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Enhanced health check endpoint"""
+    """Health check endpoint"""
     return HealthResponse(
         status="healthy",
         model_loaded=model_components.model is not None and model_components.tokenizer is not None,
-        explanation_service_available=len(model_components.explanation_service.services) > 0 if model_components.explanation_service else False,
-        search_enabled=True,
-        available_services=model_components.explanation_service.services if model_components.explanation_service else []
+        explanation_service_available=model_components.groq_client is not None
     )
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_news(request: NewsRequest):
     """
-    Enhanced prediction endpoint with better error handling and performance
+    Predict if news is fake or real with AI explanation
     
     - **text**: The news text to analyze (required)
     - **explain**: Whether to include AI explanation (default: True)
-    - **search_sources**: Whether to search for verification sources (default: True)
     """
     if model_components.model is None or model_components.tokenizer is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
@@ -629,38 +339,25 @@ async def predict_news(request: NewsRequest):
     if not request.text or len(request.text.strip()) == 0:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
-    if len(request.text.strip()) < 10:
-        raise HTTPException(status_code=400, detail="Text too short for reliable analysis")
+    if len(request.text.strip()) < 20:
+        raise HTTPException(status_code=400, detail="Text too short for reliable analysis (minimum 20 characters)")
     
     try:
-        # Get prediction with timing
+        # Get prediction
         prediction, confidence, raw_scores, processing_time = get_enhanced_prediction(request.text)
         
-        sources = []
-        search_queries = []
         explanation = None
         
-        # Enhanced source search
-        if request.search_sources and request.explain:
-            logger.info("🔍 Extracting claims and searching verification sources...")
-            claims = extract_enhanced_claims(request.text)
-            sources, search_queries = await search_fact_check_sources_enhanced(claims)
-        
-        # Get explanation
-        if request.explain and model_components.explanation_service:
-            explanation = await model_components.explanation_service.get_explanation(
-                request.text, prediction, confidence, sources
-            )
-        
-        # Format source information
-        source_info = []
-        for source in sources:
-            source_info.append(SourceInfo(
-                title=source.get('title', ''),
-                url=source.get('url', ''),
-                snippet=source.get('snippet', ''),
-                relevance_score=source.get('relevance_score', 0.0)
-            ))
+        # Get explanation if requested
+        if request.explain:
+            if model_components.groq_client:
+                explanation = await model_components.groq_client.generate_explanation(
+                    request.text, prediction, confidence
+                )
+            else:
+                # Fallback if Groq not available
+                features = model_components.groq_client.analyze_text_features(request.text) if model_components.groq_client else {}
+                explanation = f"Classification: {prediction} with {confidence:.1%} confidence. Note: Enhanced explanations require GROQ_API_KEY to be configured."
         
         return PredictionResponse(
             text=request.text,
@@ -668,8 +365,6 @@ async def predict_news(request: NewsRequest):
             confidence_score=confidence,
             raw_scores=raw_scores,
             explanation=explanation,
-            sources=source_info if request.search_sources else None,
-            search_queries=search_queries if request.search_sources else None,
             processing_time=processing_time
         )
         
@@ -677,27 +372,10 @@ async def predict_news(request: NewsRequest):
         logger.error(f"❌ Error in prediction endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-@app.get("/services")
-async def available_services():
-    """Get detailed information about available explanation services"""
-    if not model_components.explanation_service:
-        return {"error": "Explanation service not initialized"}
-    
-    return {
-        "available_services": model_components.explanation_service.services,
-        "total_services": len(model_components.explanation_service.services),
-        "service_status": {
-            "groq": {"available": "groq" in model_components.explanation_service.services, "description": "Fast LLM inference, free tier"},
-            "huggingface": {"available": "huggingface" in model_components.explanation_service.services, "description": "Free inference API"},
-            "ollama": {"available": "ollama" in model_components.explanation_service.services, "description": "Local LLM, no API costs"},
-        },
-        "cache_size": len(model_components.explanation_service.explanation_cache) if model_components.explanation_service else 0
-    }
-
 @app.get("/stats")
 async def get_stats():
-    """Get API usage statistics"""
-    cache_size = len(model_components.explanation_service.explanation_cache) if model_components.explanation_service else 0
+    """Get API statistics"""
+    cache_size = len(model_components.groq_client.explanation_cache) if model_components.groq_client else 0
     
     return {
         "model_info": {
@@ -707,48 +385,46 @@ async def get_stats():
         },
         "cache_info": {
             "explanation_cache_size": cache_size,
-            "cache_enabled": True
+            "cache_enabled": model_components.groq_client is not None
         },
         "api_info": {
-            "version": "3.1.0",
-            "features": ["Enhanced classification", "Multi-service explanations", "Smart caching", "Advanced source search"]
+            "version": "4.0.0",
+            "features": [
+                "Enhanced BERT classification",
+                "Groq-powered explanations",
+                "Smart caching",
+                "Text feature analysis",
+                "Improved confidence calibration"
+            ]
         }
     }
 
 @app.get("/")
 async def root():
-    """Enhanced root endpoint with comprehensive API information"""
+    """Root endpoint with API information"""
     return {
-        "message": "🔍 Factify API - Enhanced Fake News Detection",
-        "version": "3.1.0",
-        "improvements": [
-            "✅ Fixed Pydantic v2 compatibility",
-            "✅ Replaced deprecated on_event with lifespan",
-            "✅ Enhanced explanation quality",
-            "✅ Smart caching system",
-            "✅ Better error handling",
-            "✅ Multi-service fallbacks"
-        ],
+        "message": "🔍 Factify API - AI-Powered Fake News Detection",
+        "version": "4.0.0",
         "features": [
-            "🤖 Local BERT classification (lightweight)",
-            "💡 Multi-AI explanation services (HF → Groq → Ollama)",
-            "🔍 Advanced fact-checking source search",
-            "⚡ Smart caching for performance",
-            "🛡️ Enhanced confidence calibration"
+            "🤖 BERT-based classification",
+            "💡 Groq AI explanations",
+            "⚡ Smart caching system",
+            "🛡️ Enhanced confidence calibration",
+            "📊 Text feature analysis"
         ],
-        "available_services": len(model_components.explanation_service.services) if model_components.explanation_service else 0,
+        "explanation_service": "Groq (llama-3.1-70b)" if model_components.groq_client else "Fallback templates",
         "endpoints": {
             "health": "GET /health - Service health status",
             "predict": "POST /predict - Analyze news content",
-            "services": "GET /services - Available AI services",
             "stats": "GET /stats - API usage statistics",
             "docs": "GET /docs - Interactive API documentation"
         },
         "quick_test": {
-            "example_request": {
+            "method": "POST",
+            "url": "/predict",
+            "body": {
                 "text": "Breaking: Scientists discover new species of dinosaur in Antarctica",
-                "explain": True,
-                "search_sources": True
+                "explain": True
             }
         }
     }

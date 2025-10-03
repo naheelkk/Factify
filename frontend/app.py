@@ -264,10 +264,11 @@ def main():
                 success, result = predict_news(news_text, include_explanation)
                 
                 if success:
-                    prediction = result["prediction"]
+                    # Properly capitalize prediction
+                    prediction = result["prediction"].capitalize()
                     confidence = result["confidence_score"]
                     raw_scores = result["raw_scores"]
-                    explanation = result.get("explanation")
+                    explanation = result.get("explanation", "")
                     
                     # Prediction card
                     card_class = "fake-news" if prediction == "Fake" else "real-news"
@@ -290,10 +291,15 @@ def main():
                         fig_scores = create_scores_chart(raw_scores)
                         st.plotly_chart(fig_scores, use_container_width=True)
                     
-                    # Explanation
+                    # Explanation - Display full text without truncation
                     if include_explanation and explanation:
                         st.subheader("🧠 AI Analysis")
-                        st.info(explanation)
+                        # Use text_area for long explanations to show full content with scrolling
+                        st.markdown(f"""
+                        <div style="background-color: #e7f3ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #2196F3; max-height: 400px; overflow-y: auto;">
+                            <p style="margin: 0; color: #1976D2; line-height: 1.6;">{explanation}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
                     
                     # Raw scores
                     with st.expander("🔢 Raw Scores"):
