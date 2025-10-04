@@ -72,6 +72,28 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
+    
+    .explanation-box {
+        background-color: #e7f3ff;
+        padding: 1.5rem;
+        border-radius: 8px;
+        border-left: 4px solid #2196F3;
+        max-height: 400px;
+        overflow-y: auto;
+        margin: 1rem 0;
+    }
+    
+    .explanation-box p {
+        color: #1565C0 !important;
+        line-height: 1.8;
+        margin: 0;
+        font-size: 0.95rem;
+    }
+    
+    /* Fix for dark mode compatibility */
+    [data-testid="stMarkdownContainer"] p {
+        color: inherit;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -219,18 +241,27 @@ def main():
             if health_data:
                 st.json(health_data)
     
+    # Initialize session state for selected sample
+    if 'selected_sample_text' not in st.session_state:
+        st.session_state.selected_sample_text = ""
+    if 'auto_analyze' not in st.session_state:
+        st.session_state.auto_analyze = False
+    
     # Main content area
     col1, col2 = st.columns([2, 1])
     
     with col1:
         st.subheader("📝 Enter News Article")
         
-        # Text input
+        # Text input - use session state if sample was selected
+        default_text = st.session_state.selected_sample_text if st.session_state.selected_sample_text else ""
         news_text = st.text_area(
             "Paste your news article here:",
+            value=default_text,
             placeholder="Enter the news article you want to analyze...",
             height=200,
-            help="Paste any news article text to check if it's real or fake news."
+            help="Paste any news article text to check if it's real or fake news.",
+            key="news_input"
         )
         
         # Options
@@ -243,6 +274,15 @@ def main():
         # Analyze button
         analyze_button = st.button("🔍 Analyze News", type="primary", use_container_width=True)
         
+        # Check if we should auto-analyze (after loading sample)
+        if st.session_state.auto_analyze and news_text.strip():
+            analyze_button = True
+            st.session_state.auto_analyze = False
+        
+        # Clear the selected sample after it's loaded
+        if st.session_state.selected_sample_text:
+            st.session_state.selected_sample_text = ""
+        
         # Sample news section
         st.subheader("💡 Try Sample Articles")
         
@@ -250,7 +290,8 @@ def main():
             with st.expander(sample["title"]):
                 st.write(sample["text"])
                 if st.button(f"Analyze This Sample", key=f"sample_{i}"):
-                    news_text = sample["text"]
+                    st.session_state.selected_sample_text = sample["text"]
+                    st.session_state.auto_analyze = True
                     st.rerun()
     
     with col2:
@@ -291,15 +332,11 @@ def main():
                         fig_scores = create_scores_chart(raw_scores)
                         st.plotly_chart(fig_scores, use_container_width=True)
                     
-                    # Explanation - Display full text without truncation
+                    # Explanation - Fixed version with visible text
                     if include_explanation and explanation:
                         st.subheader("🧠 AI Analysis")
-                        # Use text_area for long explanations to show full content with scrolling
-                        st.markdown(f"""
-                        <div style="background-color: #e7f3ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #2196F3; max-height: 400px; overflow-y: auto;">
-                            <p style="margin: 0; color: #1976D2; line-height: 1.6;">{explanation}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Use st.info for better visibility across themes
+                        st.info(explanation)
                     
                     # Raw scores
                     with st.expander("🔢 Raw Scores"):
